@@ -1,0 +1,33 @@
+# Local intents, checked in order; first regex match wins.
+# action.type: device      -> HTTP call to a device API, speak `response`
+#              open_brain  -> forward the full utterance to Open Brain
+# Named groups in patterns are available as {slot} in action.url.
+
+intents:
+  - name: lights_on
+    patterns:
+      - "turn (?:on|up) the (?P<room>\\w+) lights?"
+      - "(?P<room>\\w+) lights? on"
+    action:
+      type: device
+      method: POST
+      # TODO(will): point at the real device API (Hue bridge, Tasmota, etc.)
+      url: "http://lights.local/api/{room}/on"
+    response: "Okay, {room} lights on."
+
+  - name: lights_off
+    patterns:
+      - "turn off the (?P<room>\\w+) lights?"
+      - "(?P<room>\\w+) lights? off"
+    action:
+      type: device
+      method: POST
+      url: "http://lights.local/api/{room}/off"
+    response: "Okay, {room} lights off."
+
+  - name: knowledge_query
+    patterns:
+      - "what did (?:I|we) (?:decide|say|conclude)"
+      - "check (?:my|the) (?:notes|brain)"
+    action:
+      type: open_brain
