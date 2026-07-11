@@ -1,13 +1,15 @@
 # Agent Doctor: Conversational Observability for Copilot Studio Agents
 
-**Status:** Design — v0.1 (design session output)
+**Status:** Design — v1.0 (design session output)
 **Working name:** agent doctor
-**Companion doc:** design brief (in PR/branch description)
+**Date:** 2026-07-11
 
 This document responds to the design brief: it challenges the proposed
 architecture where it deserves challenging, answers the five open questions,
-and lays out a phased build plan. Verified platform facts are cited inline;
-anything still uncertain is flagged.
+and lays out a phased build plan. Platform facts were verified against
+Microsoft Learn docs and the referenced repos as of July 2026; corrections to
+the brief's assumptions are marked **⚠**, and things that must be verified
+in-tenant are collected in §8.
 
 ---
 
@@ -19,66 +21,161 @@ diagnosis cost near zero while avoiding two traps: (a) rebuilding a dashboard
 with a chat skin, and (b) baking analysis into server-side tools so the LLM
 becomes a formatter instead of a diagnostician.
 
-The main architectural changes I'm proposing versus the brief:
+The main changes proposed versus the brief:
 
 1. **Split the tool surface into primitives + digests, not analyses.**
    `get_failure_clusters` as an MCP tool is a category error — clustering
    failures *is* the judgment the LLM should be doing. The server's job is
-   compression without judgment: deterministic per-session digests the LLM can
-   triage in bulk, plus full-transcript drill-down for the sessions it selects.
+   compression without judgment: deterministic per-session digests the LLM
+   can triage in bulk, plus full-transcript drill-down for sessions it picks.
 2. **v1 runs Claude-side, not as a Copilot Studio agent.** The doctor's
    quality lives in a long diagnostic prompt over large context. Iterate that
-   where iteration is cheapest. The Copilot Studio "agent doctor" front end is
-   a v2 packaging decision, not a v1 architecture decision.
-3. **Skip Fabric/Synapse for v1.** 30-day retention is sufficient for
-   diagnosis (which is about the current state of the agent); longitudinal
-   signal comes from eval runs, which persist independently. If trend history
-   is needed later, snapshot the *digests* (tiny) into your existing Postgres
-   rather than syncing raw transcripts into a lakehouse.
+   where iteration is cheapest. The Copilot Studio front end is a v2
+   packaging decision, not a v1 architecture decision — and native MCP
+   onboarding means the same server serves both (§2.1).
+3. **Skip Fabric/Synapse for v1 — and probably v2.** The cheapest retention
+   lever turns out to be Dataverse itself: the 30-day limit is just a
+   recurring bulk-delete job you can replace with a longer one (§4.3).
+   Longitudinal signal beyond that comes from eval runs and (if ever needed)
+   digest snapshots into your existing Postgres, not a lakehouse.
 4. **Make the doctor gradeable from day one.** The fix-type taxonomy
    (instruction gap / knowledge gap / routing gap / tool failure) is a
-   classification scheme — which means diagnosis quality can be measured with
-   seeded-failure test cases, and recommendations can be validated by the
-   apply-fix → rerun-eval → compare loop.
+   classification scheme — so diagnosis quality can be measured with
+   seeded-failure test cases, and recommendations validated by the
+   apply-fix → rerun-eval → compare loop (§4.4).
+5. **One new dependency the brief missed: enhanced transcripts.** The
+   tool-invocation and knowledge-search detail the doctor needs for two of
+   its four fix-type buckets only lands in transcripts when "include
+   node-level details" is enabled in agent settings (§2.2). Turning that on
+   is a Phase 0 prerequisite, not an optimization.
 
 ---
 
 ## 2. Verified platform facts (and what they change)
 
-> Facts below were verified against Microsoft Learn and the referenced repos
-> as of July 2026. Where a brief assumption was wrong or has moved, it's
-> called out with **⚠**.
+### 2.1 Integration surface — confirmed, with specifics
 
-### 2.1 Integration surface
+- Copilot Studio consumes MCP servers natively: Tools → Add a tool → Model
+  Context Protocol; **streamable HTTP only** (SSE support was dropped after
+  Aug 2025). Auth options: none, API key, or OAuth 2.0 (including dynamic
+  client registration). Generative orchestration must be on; DLP policies
+  apply because MCP rides the connector layer.
+  ([agent-extend-action-mcp](https://learn.microsoft.com/en-us/microsoft-copilot-studio/agent-extend-action-mcp),
+  [mcp-add-existing-server-to-agent](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent))
+- Only tools (and tool-output resources) are supported — no MCP prompts, no
+  sampling. **Design consequence:** the diagnostic prompt cannot ship as an
+  MCP prompt for the v2 Copilot Studio front end; it has to live in that
+  agent's instructions. One more reason the prompt is a versioned artifact in
+  this repo, not something embedded in the server.
+- Tool schema quirks to respect in the FastMCP server: no `$ref`/reference
+  inputs (tools get silently filtered out), enums treated as strings, avoid
+  `exclusiveMinimum` on integers.
+  ([mcp-troubleshooting](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-troubleshooting))
 
-- Copilot Studio agents can consume MCP servers as tools. *(details: §research)*
-- Custom connectors remain the alternative integration path; Troy Taylor's
-  Copilot Studio Analytics connector proves the four Dataverse tables are
-  sufficient raw material for conversational reporting.
+### 2.2 Transcript data — confirmed shape, three corrections
 
-### 2.2 Data
+- `conversationtranscript.content` (Memo, max 1,048,576 chars) is a JSON
+  array of Bot Framework-style activities. **⚠ It is plain JSON text, not
+  base64** — the base64 quirk belongs to the adjacent Dynamics 365 Customer
+  Service Copilot tables (`msdyn_copilottranscriptdata` etc.); don't confuse
+  the two data models.
+  ([conversationtranscript reference](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/conversationtranscript),
+  [download-copilot-transcript-data](https://learn.microsoft.com/en-us/dynamics365/customer-service/develop/download-copilot-transcript-data))
+- The analytics markers the digest layer needs are `valueType`-tagged
+  activities: `SessionInfo` (outcome = Resolved | Escalated | Abandon, turn
+  count, start/end), `IntentRecognition` (topic + confidence),
+  `ConversationInfo` (including `isDesignMode` — **filter test-pane sessions
+  with this**), `CSATSurveyResponse`, `VariableAssignment`, `DialogRedirect`.
+  Timestamps are epoch seconds; `from.role` distinguishes user/agent; user
+  IDs are hashed; topics are referenced by GUID (join `botcomponent` for
+  names).
+  ([analytics-transcripts-powerapps](https://learn.microsoft.com/en-us/microsoft-copilot-studio/analytics-transcripts-powerapps),
+  [mcscat "Open the Hood"](https://microsoft.github.io/mcscatblog/posts/open-the-hood-copilot-studio-transcripts/))
+- **Tool-invocation and knowledge-search detail (which sources were
+  searched, node-level traces) only appears with "enhanced transcripts"
+  enabled** (agent Settings → Advanced → include node-level details), which
+  adds `nodeTraceData` activities. Without it, the doctor is blind on the
+  tool-failure and knowledge-gap buckets. Phase 0 prerequisite.
+- Records over 1MB split into rows sharing `Name` + `ConversationStartTime`
+  with differing `Metadata.BatchId` — group, sort by BatchId, concatenate.
+  Transcripts are written **after ~30 minutes of session inactivity** (not
+  merely "sometimes delayed") — the doctor's data horizon is roughly
+  "sessions that ended half an hour ago or earlier."
+- **⚠ `msdyn_botsession` is not in Microsoft's documented analytics table
+  set** (`bot`, `botcomponent`, `conversationtranscript`). Session outcomes
+  live inside `Content` as `SessionInfo` activities. Verify whether the table
+  even exists in the environment (Phase 0); design as if it doesn't.
+  ([custom-analytics-strategy](https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/custom-analytics-strategy))
+- SharePoint-knowledge redaction confirmed, with useful nuance: the
+  question and the retrieved `search_results` survive; the generated
+  **answer** is replaced with `REDACTED`. The digest should flag these
+  sessions so the doctor reports a blind spot instead of guessing.
 
-- `conversationtranscript` holds the full activity log as JSON in `Content`;
-  records over 1MB split into multiple rows sharing `Name` +
-  `ConversationStartTime` with distinct `BatchId` — reassembly is the
-  server's job, never the LLM's.
-- Transcripts land in Dataverse **after** session end, sometimes with delay.
-  The doctor is a retrospective instrument; the design should say so out loud
-  rather than pretending to be live monitoring.
-- Default retention ~30 days via bulk-delete job (adjustable); Analytics page
-  aggregates retained longer than session-level detail.
+### 2.3 Query mechanics
 
-### 2.3 Auth
+- `content` is an opaque Memo column — Dataverse has no JSON-path filtering,
+  so **all transcript parsing is client-side** in the server. OData filters
+  work on `conversationstarttime` and the `bot` lookup; page with
+  `Prefer: odata.maxpagesize` (keep pages ~50–200 when selecting `content`)
+  and follow `@odata.nextLink`.
+- Hard-enforced service protection: 6,000 requests / 20 min execution / 52
+  concurrent per 5-minute sliding window, HTTP 429 with `Retry-After` — the
+  client honors it. Daily entitlement for app users is a pooled tenant
+  allocation (25k/day base, soft-enforced) — far above the doctor's needs
+  once digests are cached.
+  ([api-limits](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/api-limits),
+  [api-request-limits-allocations](https://learn.microsoft.com/en-us/power-platform/admin/api-request-limits-allocations))
+- Server-side aggregates cap at 50k records — irrelevant here since
+  aggregation happens over parsed digests anyway.
 
-- Server-to-server: Entra ID app registration + Dataverse **application
-  user** with a security role granting read on the four tables. This is the
-  recommended path for the MCP server (see §6.1).
+### 2.4 Evaluations — confirmed, with three caveats that shape §4.4
 
-### 2.4 Evaluations
+- Evaluations are GA; test sets up to **100 cases**, 7 test methods
+  including a **Custom LLM-judge with your own instructions and pass/fail
+  labels** — which is exactly the hook the fix-verification loop needs.
+- The REST API (`api.powerplatform.com/copilotstudio/environments/{env}/bots/{bot}/api/makerevaluation/...`)
+  can **list test sets, start runs, and read per-case results** — but it is
+  (a) flagged *preview* even though the feature is GA, (b) **cannot create
+  test sets** (author them in Studio first), and (c) allows one run at a
+  time, with results retained 89 days.
+  ([analytics-agent-evaluation-rest-api](https://learn.microsoft.com/en-us/microsoft-copilot-studio/analytics-agent-evaluation-rest-api))
+- **Design consequence:** `run_evaluation` / `compare_eval_runs` MCP tools
+  are straightforward; a `create_test_set` tool is not possible today. The
+  doctor can *recommend* new test cases but a human adds them in Studio.
+  Native "Themes → Evaluate" partially fills this gap in-product (§2.6).
 
-- Evaluations (GA) provide test sets, per-case Pass/Fail with explanations,
-  and run-over-run comparison; runs are triggerable programmatically.
-  This is the doctor's longitudinal memory and its validation loop (§6.4).
+### 2.5 Analytics APIs and retention — confirmed
+
+- **No API exposes the Analytics-page KPIs.** Dataverse transcripts (or App
+  Insights telemetry) are the only fully programmatic path — the MCP server
+  is not duplicating an existing API, it's building the only one.
+- Retention as briefed: analytics aggregates ~360 days; session/transcript
+  detail in-product 28 days; Dataverse default 30 days via the recurring
+  bulk-delete job "Bulk Delete Conversation Transcript Records Older Than 1
+  Month" — **which can simply be canceled and replaced with a longer job**
+  (e.g., 12 months, filtered to `SchemaType = powervirtualagents`). That's
+  the retention lever, and it changes the answer in §4.3.
+
+### 2.6 Build-vs-wait: what Microsoft shipped natively in 2025–26
+
+Microsoft is moving in this direction: **Themes** (AI-clustered user
+questions with one-click test-set generation), AI Summary cards, custom
+metrics (preview), an agent status/readiness page, and Monitor-tab error
+triage. Two reasons this doesn't obsolete the doctor:
+
+1. Everything above is **in-product UX** — none of it is conversational, none
+   of it is API-readable, and none of it crosses from *pattern* to *causal
+   diagnosis with a recommended edit*. The gap the brief identifies (judgment,
+   fix-type attribution, near-zero diagnosis cost) is still open.
+2. But it does shape scope: **don't build clustering-of-user-questions as a
+   differentiator** (Themes does that), and treat the doctor's eval
+   integration as complementary to Themes→Evaluate rather than competing.
+
+The build-vs-wait risk concentrates on one future possibility: Microsoft
+shipping a native conversational "ask your analytics" agent. If that arrives,
+the doctor's remaining moat is the diagnostic method (fix-type taxonomy,
+confirm-from-transcripts, suppress-by-default) and Claude-side operation —
+which is also the part that transfers to any other agent platform.
 
 ---
 
@@ -89,6 +186,7 @@ The main architectural changes I'm proposing versus the brief:
 │  Front ends                                                 │
 │   v1: Claude Desktop/Code (maker-facing)                    │
 │   v2: Copilot Studio "agent doctor" agent (owner-facing)    │
+│       — native MCP tool onboarding, streamable HTTP         │
 └──────────────────────────┬──────────────────────────────────┘
                            │ MCP (streamable HTTP)
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -96,20 +194,24 @@ The main architectural changes I'm proposing versus the brief:
 │                                                             │
 │  Tier 1 — primitives (thin, deterministic)                  │
 │    list_agents, list_sessions, get_transcript,              │
-│    get_feedback, list_eval_runs, run_evaluation             │
+│    get_feedback, list_eval_runs, run_evaluation,            │
+│    get_eval_run, compare_eval_runs                          │
 │                                                             │
 │  Tier 2 — digests (compression WITHOUT judgment)            │
 │    get_session_digests(window, filters)                     │
 │    get_agent_snapshot(window)                               │
 │                                                             │
-│  Internals: transcript reassembly (BatchId), activity       │
-│  parsing, digest extraction, OData paging, caching          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ Dataverse Web API (S2S, app user)
-┌──────────────────────────▼──────────────────────────────────┐
-│  Dataverse: conversationtranscript, bot, botcomponent,      │
-│             msdyn_botsession, eval runs                     │
-└─────────────────────────────────────────────────────────────┘
+│  Internals: OData paging + 429/Retry-After handling,        │
+│  BatchId reassembly, activity parsing (valueType markers,   │
+│  nodeTraceData), isDesignMode filtering, topic-GUID →       │
+│  botcomponent name join, digest cache                       │
+└────────────┬───────────────────────────────┬────────────────┘
+             │ Dataverse Web API             │ Power Platform API
+             │ (S2S app user, MSAL)          │ (makerevaluation)
+┌────────────▼────────────────┐  ┌───────────▼────────────────┐
+│ conversationtranscript,     │  │ eval test sets, runs,      │
+│ bot, botcomponent           │  │ per-case results           │
+└─────────────────────────────┘  └────────────────────────────┘
 ```
 
 ### 3.1 The two-tier tool surface (the core design decision)
@@ -117,13 +219,13 @@ The main architectural changes I'm proposing versus the brief:
 The brief proposes tools like `get_failure_clusters`. The problem: whoever
 writes that server code has to decide what a "failure cluster" is — and that
 decision is exactly the triage-with-judgment the brief says is the LLM's job.
-Server-side clustering gives you a dashboard widget returned as JSON.
+Server-side clustering gives you a dashboard widget returned as JSON. (Troy
+Taylor's connector illustrates the ceiling of that approach: sensible
+aggregate operations, but the output is counts and rates — reporting, not
+diagnosis.)
 
-Instead:
-
-**Tier 1 — primitives.** Thin, deterministic wrappers over Dataverse:
-sessions in a window, one reassembled transcript, feedback records, eval
-runs. No opinions.
+**Tier 1 — primitives.** Thin, deterministic wrappers: sessions in a window,
+one reassembled transcript, feedback records, eval runs. No opinions.
 
 **Tier 2 — digests.** The token-economics layer. A month of traffic might be
 hundreds of sessions × tens of KB of transcript — unfeedable. The server
@@ -132,21 +234,23 @@ deterministically extracts a compact per-session digest:
 ```json
 {
   "session_id": "…",
-  "started": "…", "duration_s": 312, "turn_count": 9,
+  "started": "2026-07-09T14:02:11Z", "duration_s": 312, "turn_count": 9,
   "outcome": "Escalated",
-  "triggered_topics": ["Fallback", "OrderStatus"],
+  "topics": ["Fallback", "OrderStatus"],
   "tools_called": [{"name": "LookupOrder", "ok": false, "error": "timeout"}],
   "knowledge_sources_hit": ["sharepoint:PolicyDocs"],
   "first_user_utterance": "why was my order cancelled and when will…",
-  "reactions": {"up": 0, "down": 1},
-  "signals": ["fallback_triggered", "tool_error", "multi_intent_opening"]
+  "csat": null, "reactions": {"up": 0, "down": 1},
+  "flags": ["fallback_triggered", "tool_error", "redacted_answers"]
 }
 ```
 
-Everything in the digest is *extractable without an LLM* — outcomes, topic
-triggers, tool errors, fallback hits, reaction counts, plus a small set of
-cheap heuristic flags (`signals`) that are hints, not verdicts. 200 sessions
-of digests fit in one context window. The LLM does the clustering — "18 of 23
+Everything in the digest is *extractable without an LLM*: outcome and turns
+from `SessionInfo`, topics from `IntentRecognition` (+ `botcomponent` join),
+tool and knowledge detail from `nodeTraceData` (enhanced transcripts), CSAT
+from survey activities, plus cheap heuristic `flags` that are hints, not
+verdicts. Test-pane sessions are dropped via `isDesignMode`. 200 sessions of
+digests fit in one context window. The LLM does the clustering — "18 of 23
 escalations opened with multi-part questions" — then drills into 3–5 full
 transcripts via Tier 1 to confirm the causal story before diagnosing.
 
@@ -180,27 +284,37 @@ The system prompt encodes the method:
 6. **Suppress** — if nothing is out of range, say "nothing worth your
    attention" and stop. The doctor's credibility is spent every time it
    manufactures a finding.
+7. **Declare blind spots** — redacted answers, disabled enhanced
+   transcripts, channels without reactions, and the ~30-minute write horizon
+   are stated, not papered over.
 
 The fix-type taxonomy is load-bearing twice over: it forces recommendations
 to be actionable (each bucket maps to a thing the maker can edit), and it
-makes the doctor's output *gradeable* (§6.4).
+makes the doctor's output *gradeable* (§4.4).
+
+Because Copilot Studio doesn't support MCP prompts (§2.1), this prompt lives
+in the repo as a versioned file, deployed as Claude context in v1 and as the
+doctor agent's instructions in v2.
 
 ### 3.3 Front end sequencing
 
 **v1: Claude Desktop/Code over the MCP server.** Reasons:
 - The diagnostic prompt needs many iterations; Claude-side you edit a file.
-  Inside Copilot Studio you're tuning instructions through the same opaque
+  Inside Copilot Studio you'd be tuning instructions through the same opaque
   orchestrator you're trying to diagnose — debugging two agents at once.
 - Diagnosis wants a big context window and strong long-document reasoning;
   triage-over-200-digests-then-read-5-transcripts is exactly the workload
   frontier models handle and orchestrated topic-based agents handle poorly.
 - The v1 user is you (the maker). The "business owner" persona in the brief
-  is real but she's the v2 audience; don't pay her constraints yet.
+  is real, but she's the v2 audience; don't pay her constraints yet.
 
-**v2: the same MCP server attached to a Copilot Studio doctor agent** for
+**v2: the same MCP server attached to a Copilot Studio doctor agent**
+(native MCP onboarding, streamable HTTP, API-key or OAuth auth) for
 owner-facing access — after the prompt is proven. The server doesn't change;
 that's the point of putting the judgment in the prompt and the mechanics in
-the server.
+the server. Expect v2 to need prompt compression (Copilot Studio instruction
+limits and orchestrator behavior differ from Claude) — treat it as a port,
+with the seeded-failure evals (§4.4) as the regression gate.
 
 ---
 
@@ -208,92 +322,138 @@ the server.
 
 ### 4.1 Auth model → **service principal (application user), not delegated**
 
-Delegated auth ties the doctor's access to a human's roles and an interactive
-token flow — wrong for a long-running server and for scheduled digests
-(§5, phase 3), and it makes the Copilot Studio v2 front end painful. Use an
-Entra app registration + Dataverse application user holding a **custom
-security role** with read privileges on the four tables (least privilege;
-don't grant a broad OOB role). Keep secrets in the server's environment, not
-in Power Platform. Rate limits for application users are generous relative
-to the doctor's query volume (digest pulls are batched and cacheable).
+Entra app registration + Dataverse **application user** with a **custom
+security role** granting org-scope Read on `conversationtranscript`, `bot`,
+`botcomponent` (least privilege; no OOB admin roles). `conversationtranscript`
+is user-owned, so org-scope read is what lets the app user see all agents'
+transcripts. MSAL client-credentials in Python, scope
+`https://{org}.crm.dynamics.com/.default`.
+
+Why not delegated/OBO: it ties access to a human's roles and an interactive
+token flow — wrong for a long-running server and unusable for the scheduled
+digest (Phase 3). Delegated is worth revisiting only if v2 needs per-user
+audit trails on transcript access.
+
+Two things the docs don't settle (verify in Phase 0): whether the **Bot
+Transcript Viewer** role can be attached to an application user (it gates the
+in-product UI; the Web API path needs table Read privileges, which the custom
+role provides regardless), and the exact privilege name in the role editor.
+The same app registration also needs a token for `api.powerplatform.com` for
+the evaluations API.
 
 ### 4.2 Where diagnosis runs → **Claude-side for v1** (see §3.3)
 
 The sharper version of this question is "where does the *prompt* live," and
-the answer is: in this repo, versioned, next to the eval cases that grade it.
+the answer is: in this repo, versioned, next to the eval fixtures that grade
+it.
 
-### 4.3 Retention → **30 days is enough for v1; no Fabric yet**
+### 4.3 Retention → **extend the bulk-delete job; no Fabric**
 
-Diagnosis answers "what's wrong with the agent *now*" — a 30-day window
-overshoots the need. What genuinely wants history is *trend* ("is it getting
-better since the instruction change?"), and eval run comparisons cover that
-without any transcript retention.
+The brief framed this as "30 days vs. build the Fabric sync." Research
+dissolved the dilemma: the 30-day limit is a recurring bulk-delete job you
+can cancel and replace (e.g., 12 months, `SchemaType = powervirtualagents`).
+At single-maker volume the storage cost is trivial, and the MCP server keeps
+querying one system. Note this does **not** extend the 28-day in-product
+analytics window — irrelevant, since the doctor reads Dataverse, not the
+Analytics page.
 
-If trend-over-organic-traffic is later needed: the digest layer already
-exists, and digests are ~1KB/session. A nightly job appending digests to
-Postgres (the Open Brain instance) gives indefinite trend history for
-effectively zero cost and zero new infrastructure. Fabric/Synapse Link is the
-right answer for an enterprise with many agents and a BI team; for this,
-it's a standing cost and a second system to operate before the core loop has
-proven out. **Decision: defer, revisit only if digest-in-Postgres proves
-insufficient.**
+Synapse Link / Fabric remain the right answer for an enterprise with many
+agents and a BI team (with the append-only caveat: by default the bulk-delete
+job's deletes propagate to the lake). For this project they're a standing
+cost and a second system to operate before the core loop has proven out.
+If trend-over-organic-traffic questions arise later, nightly digest appends
+(~1KB/session) into the existing Open Brain Postgres give indefinite history
+for free. **Decision: replace the bulk-delete job with a 12-month one in
+Phase 0; defer everything else.**
 
 ### 4.4 Validating diagnosis quality → **two loops, both cheap**
 
 1. **Seeded-failure grading (offline).** Because every diagnosis must land in
-   a fix-type bucket, diagnosis is gradeable as classification. Build a small
-   set of test fixtures: transcripts (real, redacted, or synthesized) with a
-   *known* injected root cause — an instruction deliberately missing a rule, a
-   knowledge source deliberately gapped, a topic trigger deliberately
-   overlapping. Run the doctor; grade whether it names the right bucket and a
-   recommendation that touches the actual defect. This is a standard eval set
-   for the doctor itself and it gates prompt changes.
+   a fix-type bucket, diagnosis is gradeable as classification. Build test
+   fixtures: transcripts (real, redacted, or synthesized in the documented
+   activity format) with a *known* injected root cause — an instruction
+   deliberately missing a rule, a knowledge source deliberately gapped, a
+   topic trigger deliberately overlapping, a tool wired to time out. Run the
+   doctor over fixtures; grade whether it names the right bucket and a
+   recommendation touching the actual defect. This gates prompt changes —
+   including the v2 port to Copilot Studio instructions.
 2. **Fix-verification loop (online).** The doctor's recommendation predicts
    which eval cases should flip: apply the edit, `run_evaluation`,
    `compare_eval_runs`. A recommendation that doesn't move its predicted
-   cases is a wrong diagnosis — and that outcome feeds back into loop 1 as a
-   new fixture. This closes the loop the brief calls "can eval test sets
-   grade the doctor's own recommendations" — yes, mechanically.
+   cases is a wrong diagnosis — and becomes a new fixture for loop 1.
+   Platform caveats to design around: test sets are authored in Studio (the
+   API can't create them), 100 cases max, one run at a time, results kept 89
+   days (the server snapshots run results it wants to keep). The **Custom**
+   LLM-judge method (own instructions + pass/fail labels) lets eval cases
+   encode the doctor's predicted behavior change directly.
 
-### 4.5 Fork Troy Taylor's connector vs. clean-room → **clean-room server, strip-mine the connector**
+So yes — eval test sets can grade the doctor's recommendations, mechanically:
+loop 2 measures whether following the doctor's advice moved the metric the
+doctor said it would move.
 
-The connector is the right existence proof and the wrong substrate: it's a
-Power Platform custom connector (OpenAPI artifact) living inside the
-platform's auth and hosting model, and it stops at retrieval/reporting — it
-has no digest layer, and the digest layer is where the design's leverage is.
-Build the FastMCP server clean-room (consistent with Open Brain), but mine
-the connector's query definitions for the hard-won details: which columns
-matter, transcript Content parsing, BatchId reassembly, outcome mapping.
-Credit it in the README.
+### 4.5 Fork Troy Taylor's connector vs. clean-room → **clean-room; strip-mine the connector; don't ignore two newer options**
+
+The connector is the right existence proof and the wrong substrate. Verified
+specifics: it's a one-commit drop (Feb 2026), delegated-auth only (it copies
+the caller's AAD token), fetches a single `$top=5000` page with no
+pagination, parses in-memory inside a Power Platform connector script, and
+swallows parse errors. Fine for demo scale; not a foundation. **Mine it for
+domain knowledge** — its 7 MCP tool names are a sensible baseline taxonomy,
+and its activity heuristics (`from.role`, `channelData.topicName`,
+`type == "handoff"` for escalation) shortcut parser development. Credit it in
+the README.
+
+Two alternatives that didn't exist when the brief's framing formed:
+
+- **Microsoft's official Dataverse MCP server** (`{org}.crm.dynamics.com/api/mcp`)
+  can `read_query` any table today. It's the right tool for ad hoc
+  exploration during Phase 0, but not the product: no transcript parsing, no
+  digest layer, admin-gated enablement, and per-call Copilot-credit billing
+  since Dec 2025. Also a useful existence proof that IT will recognize.
+- **Copilot Studio Kit ("Copilot Agent Kit")** parses transcripts into
+  pre-aggregated `cat_` KPI tables twice daily. If the Kit is already
+  installed in the tenant, the digest layer could read those tables instead
+  of re-parsing raw JSON. Not worth *installing* for this (managed solution,
+  premium connectors, dozens of flows, AI Builder credits) — but worth a
+  Phase 0 check for whether it's present.
+
+**Decision: Python/FastMCP clean-room server** (consistent with Open Brain),
+borrowing the connector's taxonomy and heuristics, with proper MSAL
+client-credentials auth, `@odata.nextLink` pagination, and 429 handling.
 
 ---
 
 ## 5. Phased plan
 
-**Phase 0 — spike (1–2 evenings).** App registration + application user +
-custom role. Python script (no MCP yet): pull one day of
+**Phase 0 — spike + environment audit (1–2 evenings).** App registration,
+application user, custom role. Python script (no MCP yet): pull one day of
 `conversationtranscript`, reassemble a split record, parse Content into a
-digest. *Exit: a printed digest that matches what the Monitor tab shows for
-the same session.* This retires the two biggest unknowns (auth and Content
-format) before any architecture exists.
+digest. While in there, run the environment checklist (§8): enhanced
+transcripts on, transcript saving enabled, bulk-delete job replaced with
+12-month retention, `msdyn_botsession` existence, Kit presence. *Exit: a
+printed digest matching what the Monitor tab shows for the same session.*
+This retires the two biggest unknowns (auth, Content format) before any
+architecture exists.
 
-**Phase 1 — MCP server + doctor prompt.** FastMCP server with Tier 1 + Tier 2
-tools; diagnostic prompt v1; wire into Claude Desktop/Code. *Exit: "how did
-the agent do this week?" returns a triaged answer with ≤3 findings, each
-with a fix-type and a concrete edit.*
+**Phase 1 — MCP server + doctor prompt.** FastMCP server (streamable HTTP)
+with Tier 1 + Tier 2 tools; diagnostic prompt v1; wire into Claude
+Desktop/Code. *Exit: "how did the agent do this week?" returns a triaged
+answer with ≤3 findings, each with a fix-type and a concrete edit.*
 
 **Phase 2 — evals integration.** `run_evaluation`, `list_eval_runs`,
-`compare_eval_runs` tools; the fix-verification loop (§4.4.2) becomes
-runnable end-to-end. Start the seeded-failure fixture set (§4.4.1) with ~10
-cases.
+`compare_eval_runs` against the Power Platform API; author the first test
+set in Studio; run the fix-verification loop (§4.4.2) end-to-end once.
+Start the seeded-failure fixture set (§4.4.1) with ~10 cases.
 
 **Phase 3 — the andon cord.** Scheduled daily run of the same prompt over
 the same tools ("anything worth knowing?"), delivered to email/Teams. The
 suppress rule matters most here: most days the correct digest is silence.
 Silence-by-default is what makes the one-day-in-ten alert credible.
 
-**Phase 4 (contingent) — trend store.** Nightly digest append to Postgres,
-only if organic-traffic trend questions actually arise in use.
+**Phase 4 (contingent) — v2 front end and/or trend store.** Attach the
+server to a Copilot Studio doctor agent for owner-facing access (prompt
+port gated by the fixture evals); nightly digest appends to Postgres if
+organic-traffic trend questions actually arise in use.
 
 ---
 
@@ -301,12 +461,14 @@ only if organic-traffic trend questions actually arise in use.
 
 | Risk | Impact | Design-around |
 |---|---|---|
-| Governance disables transcript saving in the environment | Kills the whole approach | Phase 0 verifies on the real environment first; document the dependency; digests reduce the retention ask |
-| Transcript write delay post-session | "Why did it fail an hour ago" may return nothing | Doctor states its data horizon in answers; never claims live status |
-| SharePoint knowledge answers redacted in transcripts | Knowledge-gap diagnoses lose evidence | Digest flags `redacted_content`; doctor reports the blind spot instead of guessing |
-| Reactions unavailable on M365 Copilot channel | Loses the cheapest failure signal on one channel | Weight outcome + fallback signals higher; per-channel signal availability in the snapshot |
-| Test-canvas sessions absent from analytics | Maker's own testing invisible to the doctor | Fine — evals are the instrumented test path; document it |
-| API entitlement limits on app user | Throttling on big digest pulls | Batch + cache digests server-side; digests make re-pulls rare |
+| Governance disables transcript saving in the environment | Kills the whole approach | Phase 0 verifies on the real environment first; document the dependency |
+| Enhanced transcripts left off | Doctor blind on tool-failure and knowledge-gap buckets | Phase 0 checklist item; server detects absence of `nodeTraceData` and the doctor declares the blind spot |
+| ~30-min post-session write delay | "Why did it fail just now" returns nothing | Doctor states its data horizon; never claims live status |
+| SharePoint answers `REDACTED` in transcripts | Knowledge-gap evidence weakened | Digest flags `redacted_answers`; questions + retrieved `search_results` survive, so partial diagnosis is still possible — doctor says which half it's missing |
+| Reactions unavailable on M365 Copilot channel (and transcripts absent entirely for M365 Copilot agents) | Loses signal on those channels | Per-channel signal availability in the snapshot; weight outcome/fallback signals higher |
+| Eval REST API is preview | Breaking changes to §4.4.2 plumbing | Thin client isolated in one module; the connector actions are a documented fallback path |
+| Native features (Themes, status page, AI summaries) expand | Overlap erodes the doctor's value | Differentiate on causal diagnosis + fix-type + suppression, not clustering or KPI display (§2.6) |
+| Service-protection 429s on big pulls | Slow digest refresh | Honor `Retry-After`, page at 50–200 rows, cache digests — re-pulls become rare |
 | Doctor hallucinates causes from thin data | Trust loss — the exact failure the brief is fighting | Confirm-from-transcripts rule (§3.2.3); suppress rule; seeded-failure eval gate |
 
 ---
@@ -319,3 +481,38 @@ only if organic-traffic trend questions actually arise in use.
 - Prompt changes to the doctor are gated by the seeded-failure eval set.
 - At least one real instruction fix has gone brief → diagnosis → edit →
   eval-verified improvement, end to end.
+
+---
+
+## 8. Phase 0 in-tenant verification checklist
+
+Things the docs don't settle or that vary by environment:
+
+- [ ] Transcript saving enabled in PPAC for the target environment (and not
+      overridden by an environment-group rule)
+- [ ] Enhanced transcripts ("include node-level details") enabled on the
+      target agent; confirm `nodeTraceData` activities appear
+- [ ] Replace the default bulk-delete job with a 12-month retention job
+      (filter `SchemaType = powervirtualagents`)
+- [ ] Custom security role: confirm the exact read-privilege names for
+      `conversationtranscript` in the role editor; confirm the app user can
+      read all agents' transcripts (org scope)
+- [ ] Whether Bot Transcript Viewer is assignable to an application user
+      (nice-to-know; custom role should suffice for Web API)
+- [ ] Does `msdyn_botsession` exist in this environment? (Design assumes no)
+- [ ] Is the Copilot Studio Kit installed? (If yes: evaluate reading `cat_`
+      KPI tables as a digest shortcut)
+- [ ] Evaluations REST API reachable with the app registration's token
+      against `api.powerplatform.com` (preview API; confirm permissions)
+- [ ] Which channels the agent runs on → per-channel signal availability
+      (reactions, transcripts)
+
+## Sources
+
+Key references (full citations inline above): Microsoft Learn — MCP
+extensibility, evaluations REST API, transcript table reference and
+analytics-transcripts guides, custom analytics strategy, admin transcript
+controls, API limits; Power CAT `mcscatblog` transcript deep-dive; Troy
+Taylor's SharingIsCaring Copilot Studio Analytics connector; Power CAT
+Copilot Studio Kit repo and docs; Dataverse MCP server docs and launch/update
+blogs.
