@@ -26,6 +26,15 @@ Pi 5 + ReSpeaker XVF3800          Mac Studio (over Tailscale)
 
 ## Milestone 1
 
+### Setup (Mac)
+
+```bash
+uv venv .venv && source .venv/bin/activate
+uv pip install -r server/requirements.txt -r router/requirements.txt \
+    -r satellite/requirements-mac.txt -r requirements-dev.txt
+python3 -m pytest   # all green before touching anything
+```
+
 1. **Wake word validation** (on the Pi):
 
    ```bash
@@ -39,16 +48,25 @@ Pi 5 + ReSpeaker XVF3800          Mac Studio (over Tailscale)
 2. **STT server** (on the Mac):
 
    ```bash
-   cd server && pip install -r requirements.txt
-   uvicorn stt_server:app --host 0.0.0.0 --port 8100
+   cd server && ../.venv/bin/python -m uvicorn stt_server:app --host 0.0.0.0 --port 8100
    ```
+
+   First transcription request triggers a one-time model download (`WHISPER_MODEL=small`
+   is ~460 MB, useful for fast bring-up; the default `large-v3` is ~3 GB).
 
 3. **Router** (on the Mac):
 
    ```bash
-   cd router && pip install -r requirements.txt
-   ANTHROPIC_API_KEY=… OPEN_BRAIN_URL=… uvicorn router:app --host 0.0.0.0 --port 8200
+   cd router && ANTHROPIC_API_KEY=… OPEN_BRAIN_URL=… ../.venv/bin/python -m uvicorn router:app --host 0.0.0.0 --port 8200
    ```
+
+**Fake satellite (no Pi needed):** with the STT server and router running,
+
+```bash
+cd satellite && ../.venv/bin/python3 fake_satellite.py
+```
+
+press Enter, speak, hear the answer through the Mac speakers.
 
 4. **Full loop** (on the Pi):
 
