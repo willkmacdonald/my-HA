@@ -31,6 +31,9 @@ FRAME_SAMPLES = 1280  # 80 ms, openWakeWord's expected frame size
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
 PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium")
+# MUST be the XVF3800's own playback device (see docs/hardware.md): the AEC
+# can only cancel audio it plays itself. e.g. APLAY_DEVICE=plughw:CARD=XVF3800
+APLAY_DEVICE = os.environ.get("APLAY_DEVICE", "default")
 
 # Utterance endpointing: stop after this much sustained quiet, or at max length.
 SILENCE_RMS = 300          # int16 RMS below this counts as silence; tune on-device
@@ -82,7 +85,7 @@ def speak(text: str) -> None:
         stdout=subprocess.PIPE,
     )
     aplay = subprocess.Popen(
-        ["aplay", "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
+        ["aplay", "-D", APLAY_DEVICE, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
         stdin=piper.stdout,
     )
     piper.stdin.write(text.encode())
