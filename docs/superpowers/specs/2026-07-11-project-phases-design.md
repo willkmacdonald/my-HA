@@ -142,6 +142,26 @@ Known design decision at phase start: openWakeWord cannot run on an
 ESP32-S3 — either microWakeWord on-chip, or continuous streaming to the Mac
 with wake-word detection server-side.
 
+## Carry-over notes for Phase 2 (from Phase 1 final review, 2026-07-12)
+
+Deliberately deferred, to be picked up when Phase 2 touches these files:
+
+- **Router hot-path latency:** `router.py` creates a fresh `AsyncAnthropic()`
+  and `httpx.AsyncClient()` per call (TCP+TLS handshake per voice turn).
+  Move to module-level clients when Phase 2 modifies the router.
+- **`pipeline.transcribe` has no receive timeout** — a wedged STT server
+  hangs the satellite forever. Add a deadline when Phase 2 touches pipeline.
+- **Push-channel design constraint:** `fake_satellite.main()` blocks on
+  `input()`; it cannot simultaneously hold a router→satellite websocket
+  open. The Phase 2 push listener needs a background task/thread — decide
+  this shape early, it reshapes `main()`.
+- **`satellite.py` is never imported by the Mac test suite** (openwakeword
+  is Pi-only) — a cheap `py_compile` smoke test would catch name-level
+  breakage before Phase 3 hardware bring-up.
+- **Hardening for later phases:** STT server accepts unbounded audio before
+  "END" (cap at ~60 s), and both services bind `0.0.0.0` (bind the
+  Tailscale IP when the Pi joins).
+
 ## Parked (recorded, not planned)
 
 Custom KiCad PCB (ESP32-S3 + PDM MEMS mics + XVF3800 chip) and the
