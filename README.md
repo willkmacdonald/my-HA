@@ -54,11 +54,17 @@ python3 -m pytest   # all green before touching anything
    First transcription request triggers a one-time model download (`WHISPER_MODEL=small`
    is ~460 MB, useful for fast bring-up; the default `large-v3` is ~3 GB).
 
-3. **Router** (on the Mac):
+3. **Router** (on the Mac). The Anthropic key lives in a gitignored `.env`
+   at the repo root (`ANTHROPIC_API_KEY=…`, sourced from the `wkm-shared-kv`
+   Key Vault); the router reads plain env vars, so source it at launch:
 
    ```bash
-   cd router && ANTHROPIC_API_KEY=… OPEN_BRAIN_URL=… ../.venv/bin/python -m uvicorn router:app --host 0.0.0.0 --port 8200
+   cd router && set -a && source ../.env && set +a && \
+       ../.venv/bin/python -m uvicorn router:app --host 0.0.0.0 --port 8200
    ```
+
+   (`OPEN_BRAIN_URL` is unset until Phase 2 — knowledge queries fall back
+   to the LLM.)
 
 **Fake satellite (no Pi needed):** with the STT server and router running,
 
