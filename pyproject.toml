@@ -8,3 +8,12 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["router/tests", "server/tests", "satellite/tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # starlette.testclient warns that httpx is deprecated in favor of "httpx2" (its
+    # replacement package). We can't migrate: respx 0.23.1 (used to mock outbound
+    # calls in router/tests/test_router.py) only patches the `httpx` transport, not
+    # httpx2 — that requires a separate, differently-shaped plugin (pytest-httpx2)
+    # with no drop-in `respx.mock`/`respx.post` API. Remove this once respx ships
+    # native httpx2 support and the test mocks are migrated to it.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.:starlette.exceptions.StarletteDeprecationWarning",
+]
