@@ -9,6 +9,7 @@ Usage:
 """
 
 import os
+from functools import lru_cache
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -17,7 +18,12 @@ from faster_whisper import WhisperModel
 MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 
 app = FastAPI()
-model = WhisperModel(MODEL, device="auto", compute_type="auto")
+
+
+@lru_cache(maxsize=1)
+def get_model() -> WhisperModel:
+    """Load whisper on first use, not at import — keeps tests and startup fast."""
+    return WhisperModel(MODEL, device="auto", compute_type="auto")
 
 
 @app.websocket("/stt")
@@ -37,7 +43,7 @@ async def stt(ws: WebSocket) -> None:
         return
 
     audio = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _ = model.transcribe(audio, language="en", vad_filter=True)
+    segments, _ = get_model().transcribe(audio, language="en", vad_filter=True)
     text = " ".join(seg.text.strip() for seg in segments)
     await ws.send_json({"text": text})
     await ws.close()
