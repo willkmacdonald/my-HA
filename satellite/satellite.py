@@ -15,18 +15,14 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import os
 import subprocess
 
 import numpy as np
 import requests
 import sounddevice as sd
-import websockets
 from openwakeword.model import Model
-
-SAMPLE_RATE = 16000
-FRAME_SAMPLES = 1280  # 80 ms, openWakeWord's expected frame size
+from pipeline import FRAME_SAMPLES, SAMPLE_RATE, record_utterance, transcribe
 
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
@@ -34,48 +30,6 @@ PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium")
 # MUST be the XVF3800's own playback device (see docs/hardware.md): the AEC
 # can only cancel audio it plays itself. e.g. APLAY_DEVICE=plughw:CARD=XVF3800
 APLAY_DEVICE = os.environ.get("APLAY_DEVICE", "default")
-
-# Utterance endpointing: stop after this much sustained quiet, or at max length.
-SILENCE_RMS = 300          # int16 RMS below this counts as silence; tune on-device
-SILENCE_SECONDS = 0.8
-MAX_UTTERANCE_SECONDS = 12.0
-
-
-def rms(frame: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
-
-
-def record_utterance(stream: sd.InputStream) -> bytes:
-    """Record from wake-word trigger until sustained silence."""
-    frames: list[bytes] = []
-    quiet_frames = 0
-    quiet_needed = int(SILENCE_SECONDS * SAMPLE_RATE / FRAME_SAMPLES)
-    max_frames = int(MAX_UTTERANCE_SECONDS * SAMPLE_RATE / FRAME_SAMPLES)
-    started = False  # don't endpoint before speech has begun
-
-    for _ in range(max_frames):
-        frame, _ = stream.read(FRAME_SAMPLES)
-        frames.append(bytes(frame))
-        loud = rms(np.frombuffer(frame, dtype=np.int16)) >= SILENCE_RMS
-        if loud:
-            started = True
-            quiet_frames = 0
-        elif started:
-            quiet_frames += 1
-            if quiet_frames >= quiet_needed:
-                break
-    return b"".join(frames)
-
-
-async def transcribe(audio: bytes) -> str:
-    """Stream PCM chunks to the STT server, get the transcript back."""
-    async with websockets.connect(STT_URL, max_size=None) as ws:
-        chunk = FRAME_SAMPLES * 2 * 10  # ~0.8 s per chunk
-        for i in range(0, len(audio), chunk):
-            await ws.send(audio[i : i + chunk])
-        await ws.send("END")
-        reply = json.loads(await ws.recv())
-    return reply["text"].strip()
 
 
 def speak(text: str) -> None:
@@ -119,7 +73,7 @@ def main() -> None:
             print("wake word detected, listening…")
             oww.reset()
             audio = record_utterance(stream)
-            text = asyncio.run(transcribe(audio))
+            text = asyncio.run(transcribe(audio, STT_URL))
             print(f"heard: {text!r}")
             if not text:
                 continue
