@@ -58,7 +58,8 @@ async def run_device_action(intent: dict, match: re.Match) -> str:
     action = intent["action"]
     url = action["url"].format(**match.groupdict())
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.request(action.get("method", "POST"), url, json=action.get("json"))
+        resp = await client.request(action.get("method", "POST"), url, json=action.get("json"))
+        resp.raise_for_status()
     return intent.get("response", "Done.").format(**match.groupdict())
 
 

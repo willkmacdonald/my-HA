@@ -65,7 +65,11 @@ def main() -> None:
 
     rate = hits / args.trials
     print(f"\n=== {hits}/{args.trials} detected ({rate:.0%}) ===")
-    print(f"peak scores: min {min(peak_scores):.3f}  median {sorted(peak_scores)[len(peak_scores) // 2]:.3f}  max {max(peak_scores):.3f}")
+    median_score = sorted(peak_scores)[len(peak_scores) // 2]
+    print(
+        f"peak scores: min {min(peak_scores):.3f}  "
+        f"median {median_score:.3f}  max {max(peak_scores):.3f}"
+    )
     print("baseline with bare mic was ~5%; theory validated if this is >90%")
 
 

@@ -8,6 +8,7 @@ Usage:
     uvicorn stt_server:app --host 0.0.0.0 --port 8100
 """
 
+import asyncio
 import os
 from functools import lru_cache
 
@@ -43,7 +44,9 @@ async def stt(ws: WebSocket) -> None:
         return
 
     audio = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _ = get_model().transcribe(audio, language="en", vad_filter=True)
+    segments, _ = await asyncio.to_thread(
+        lambda: get_model().transcribe(audio, language="en", vad_filter=True)
+    )
     text = " ".join(seg.text.strip() for seg in segments)
     await ws.send_json({"text": text})
     await ws.close()

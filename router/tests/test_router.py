@@ -100,6 +100,14 @@ async def test_run_device_action_calls_url_with_slots() -> None:
 
 
 @respx.mock
+async def test_device_action_http_error_returns_spoken_error_not_success() -> None:
+    respx.post("http://lights.local/api/kitchen/on").mock(return_value=Response(500))
+    resp = client.post("/route", json={"text": "turn on the kitchen lights"})
+    assert resp.status_code == 200
+    assert resp.json() == {"speech": router.ERROR_SPEECH, "intent": "error"}
+
+
+@respx.mock
 async def test_ask_open_brain_returns_first_hit_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
