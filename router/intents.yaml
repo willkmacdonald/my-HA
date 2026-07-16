@@ -1,13 +1,56 @@
 # Local intents, checked in order; first regex match wins.
-# action.type: device      -> HTTP call to a device API, speak `response`
+#
+# Ordering + anchoring (spec "Matching precision & dispatch safety", 2026-07-15):
+# timer intents come BEFORE device intents; every command pattern is anchored
+# to the utterance start with an optional politeness prefix, so command
+# n-grams inside questions or reminder payloads never hijack routing.
+#
+# action.type: timer       -> dispatched to timers.handle_timer (verb: set|cancel|query)
+#              device      -> HTTP call to a device API, speak `response`
 #              open_brain  -> forward the full utterance to Open Brain
 # Named groups in patterns are available as {slot} in action.url.
+#
+# _p is the politeness/filler prefix, inlined in every pattern:
+#   (?:please |hey |ok |okay |um |uh )*
 
 intents:
+  - name: timer_set
+    patterns:
+      - "^(?:please |hey |ok |okay |um |uh )*(?:set|start) (?:a |an )?timer\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*(?:\\w+[ -])+minute timer\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*set (?:a |an )?alarm\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*wake me(?: up)? at\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*remind me to\\b"
+    action:
+      type: timer
+      verb: set
+
+  - name: timer_cancel
+    patterns:
+      - "^(?:please |hey |ok |okay |um |uh )*cancel\\b.*\\b(?:timer|alarm|reminder)s?\\b"
+    action:
+      type: timer
+      verb: cancel
+
+  - name: timer_query
+    patterns:
+      - "^(?:please |hey |ok |okay |um |uh )*how long(?: is)? left\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*what (?:timer|alarm|reminder)s?\\b"
+    action:
+      type: timer
+      verb: query
+
+  - name: knowledge_query
+    patterns:
+      - "^(?:please |hey |ok |okay |um |uh )*what did (?:i|we) (?:decide|say|conclude)\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*check (?:my|the) (?:notes|brain)\\b"
+    action:
+      type: open_brain
+
   - name: lights_on
     patterns:
-      - "turn (?:on|up) the (?P<room>\\w+) lights?"
-      - "(?P<room>\\w+) lights? on"
+      - "^(?:please |hey |ok |okay |um |uh )*turn (?:on|up) the (?P<room>\\w+) lights?\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? on\\b"
     action:
       type: device
       method: POST
@@ -17,17 +60,10 @@ intents:
 
   - name: lights_off
     patterns:
-      - "turn off the (?P<room>\\w+) lights?"
-      - "(?P<room>\\w+) lights? off"
+      - "^(?:please |hey |ok |okay |um |uh )*turn off the (?P<room>\\w+) lights?\\b"
+      - "^(?:please |hey |ok |okay |um |uh )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? off\\b"
     action:
       type: device
       method: POST
       url: "http://lights.local/api/{room}/off"
     response: "Okay, {room} lights off."
-
-  - name: knowledge_query
-    patterns:
-      - "what did (?:I|we) (?:decide|say|conclude)"
-      - "check (?:my|the) (?:notes|brain)"
-    action:
-      type: open_brain

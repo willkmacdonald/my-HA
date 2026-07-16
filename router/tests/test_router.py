@@ -145,3 +145,92 @@ def test_lifespan_creates_shared_clients_and_scheduler(client) -> None:
 def test_events_websocket_accepts_connection(client) -> None:
     with client.websocket_connect("/events"):
         pass  # connect + clean close is the assertion
+
+
+# --- intent-matching collision tests (spec §Testing, audit 2026-07-15) ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_intent"),
+    [
+        ("what did I decide about the kitchen lights on the porch", "knowledge_query"),
+        ("check my notes about office lights off schedule", "knowledge_query"),
+        ("remind me to turn on the porch lights at 8", "timer_set"),
+        ("remind me to check my notes at 8 pm", "timer_set"),
+        ("set a timer for 10 minutes", "timer_set"),
+        ("cancel all my timers", "timer_cancel"),
+        ("how long is left on my timer", "timer_query"),
+        ("turn on the kitchen lights", "lights_on"),
+        ("kitchen lights off", "lights_off"),
+    ],
+)
+def test_intent_routing_precision(text: str, expected_intent: str) -> None:
+    matched = router.match_intent(text)
+    assert matched is not None, f"expected {expected_intent}, got no match"
+    assert matched[0]["name"] == expected_intent
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "don't turn on the kitchen lights",  # negation -> LLM
+        "The lights on my dashboard are red, what does that mean",  # article slot -> LLM
+        "turn on the living room lights",  # multi-word room (known gap)
+    ],
+)
+def test_non_commands_fall_through_to_llm(text: str) -> None:
+    assert router.match_intent(text) is None
+
+
+# --- dispatch guard (spec: Matching precision & dispatch safety) ---
+
+
+def test_validate_intents_rejects_unknown_type() -> None:
+    bad = [{"name": "x", "patterns": ["^x$"], "action": {"type": "bogus"}}]
+    with pytest.raises(RuntimeError, match="unhandled action type"):
+        router.validate_intents(bad)
+
+
+def test_validate_intents_rejects_unknown_timer_verb() -> None:
+    bad = [{"name": "x", "patterns": ["^x$"], "action": {"type": "timer", "verb": "snooze"}}]
+    with pytest.raises(RuntimeError, match="unhandled timer verb"):
+        router.validate_intents(bad)
+
+
+def test_unknown_action_type_speaks_clarification_never_llm(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = AsyncMock(return_value="should never be called")
+    monkeypatch.setattr(router, "ask_llm", llm)
+    monkeypatch.setattr(
+        router,
+        "match_intent",
+        lambda text: ({"name": "x", "action": {"type": "bogus"}}, None),
+    )
+    resp = client.post("/route", json={"text": "whatever"})
+    assert resp.json() == {"speech": "I don't know how to do that yet.", "intent": "unsupported"}
+    llm.assert_not_awaited()
+
+
+# --- timer dispatch wiring ---
+
+
+def test_timer_intent_dispatches_to_handle_timer(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    handled: dict = {}
+
+    async def fake_handle(verb, text, store, scheduler):
+        handled["args"] = (verb, text)
+        return "Timer set for 10 minutes."
+
+    monkeypatch.setattr(router.timers, "handle_timer", fake_handle)
+    resp = client.post("/route", json={"text": "set a timer for 10 minutes"})
+    assert resp.json() == {"speech": "Timer set for 10 minutes.", "intent": "timer_set"}
+    assert handled["args"] == ("set", "set a timer for 10 minutes")
+
+
+def test_timer_set_end_to_end_through_route(client) -> None:
+    resp = client.post("/route", json={"text": "set a timer for 10 minutes"})
+    assert resp.json() == {"speech": "Timer set for 10 minutes.", "intent": "timer_set"}
+    resp = client.post("/route", json={"text": "how long is left on my timer"})
+    assert resp.json()["intent"] == "timer_query"
+    assert resp.json()["speech"].startswith("Your 10-minute timer has ")

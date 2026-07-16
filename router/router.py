@@ -42,6 +42,30 @@ log = logging.getLogger("router")
 
 INTENTS = yaml.safe_load(Path(__file__).with_name("intents.yaml").read_text())["intents"]
 
+HANDLED_TYPES = {"device", "open_brain", "timer"}
+TIMER_VERBS = {"set", "cancel", "query"}
+
+
+def validate_intents(intents: list[dict]) -> None:
+    """Fail fast at startup if intents.yaml declares an action the router
+    can't dispatch (spec: Matching precision & dispatch safety)."""
+    for intent in intents:
+        action = intent.get("action") or {}
+        kind = action.get("type")
+        if kind not in HANDLED_TYPES:
+            raise RuntimeError(
+                f"intents.yaml: intent {intent.get('name')!r} declares "
+                f"unhandled action type {kind!r} (handled: {sorted(HANDLED_TYPES)})"
+            )
+        if kind == "timer" and action.get("verb") not in TIMER_VERBS:
+            raise RuntimeError(
+                f"intents.yaml: intent {intent.get('name')!r} declares "
+                f"unhandled timer verb {action.get('verb')!r} (handled: {sorted(TIMER_VERBS)})"
+            )
+
+
+validate_intents(INTENTS)
+
 
 class Utterance(BaseModel):
     text: str
@@ -128,11 +152,22 @@ async def route(utt: Utterance, request: Request) -> dict:
                     "speech": await run_device_action(intent, match, state.http),
                     "intent": intent["name"],
                 }
-            if kind == "open_brain" and OPEN_BRAIN_URL:
-                return {
-                    "speech": await ask_open_brain(text, state.http, state.anthropic),
-                    "intent": intent["name"],
-                }
+            if kind == "timer":
+                speech = await timers.handle_timer(
+                    intent["action"]["verb"], text, state.store, state.scheduler
+                )
+                return {"speech": speech, "intent": intent["name"]}
+            if kind == "open_brain":
+                if OPEN_BRAIN_URL:
+                    return {
+                        "speech": await ask_open_brain(text, state.http, state.anthropic),
+                        "intent": intent["name"],
+                    }
+                # documented degradation: no Open Brain configured -> LLM fallback
+            else:
+                # unreachable via validate_intents; runtime belt for hand-edited configs
+                log.warning("intent %r declares unhandled action type %r", intent["name"], kind)
+                return {"speech": "I don't know how to do that yet.", "intent": "unsupported"}
         return {"speech": await ask_llm(text, state.anthropic), "intent": "llm_fallback"}
     except Exception:
         log.exception("routing failed for %r", text)
