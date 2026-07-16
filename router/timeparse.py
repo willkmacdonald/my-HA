@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("America/Chicago")
@@ -133,3 +134,97 @@ def parse_duration(text: str) -> int | None:
             return None
         return _checked(n * _UNIT_SECONDS[m["unit"]])
     return None
+
+
+_WEEKDAY_NAMES = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+_CLOCK_RE = re.compile(rf"^(?P<h>\d{{1,2}}|{_NUM})(?::(?P<m>\d{{2}}))?(?: ?(?P<mer>a ?m|p ?m))?$")
+
+
+def parse_clock(text: str) -> tuple[int, int, bool] | None:
+    """'7', '7 am', '6:30 pm', 'noon', 'midnight' -> (hour24, minute, explicit)."""
+    t = _norm(text)
+    if t == "noon":
+        return (12, 0, True)
+    if t == "midnight":
+        return (0, 0, True)
+    m = _CLOCK_RE.match(t)
+    if not m:
+        return None
+    hour = _words_to_int(m["h"])
+    minute = int(m["m"]) if m["m"] else 0
+    if hour is None or not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        return None
+    mer = (m["mer"] or "").replace(" ", "")
+    if mer:
+        if not (1 <= hour <= 12):
+            return None
+        hour = hour % 12 + (12 if mer == "pm" else 0)
+        return (hour, minute, True)
+    return (hour, minute, False)
+
+
+def _combine(d: date, hour: int, minute: int) -> datetime:
+    """Wall-clock combine in LOCAL_TZ — DST-safe (never adds timedeltas to aware dts)."""
+    return datetime.combine(d, time(hour, minute), tzinfo=LOCAL_TZ)
+
+
+def resolve_clock(hour: int, minute: int, explicit: bool, *, now: datetime) -> datetime:
+    """Explicit am/pm: today-or-tomorrow at that time. Bare: next occurrence
+    within 12 hours (spec rule) — try both am and pm interpretations."""
+    if explicit:
+        cand = _combine(now.date(), hour, minute)
+        return cand if cand > now else _combine(now.date() + timedelta(days=1), hour, minute)
+    # bare "7" -> {7:00, 19:00}; bare "12" -> {0:00, 12:00}; bare 24h "14" -> {14:00}
+    hours = {hour} if hour > 12 else {hour % 12, hour % 12 + 12}
+    candidates = sorted(
+        _combine(now.date() + timedelta(days=day), h, minute) for day in (0, 1) for h in hours
+    )
+    for cand in candidates:
+        if cand > now:
+            return cand
+    raise AssertionError("unreachable: candidates span more than 24 h")
+
+
+def parse_recurrence(text: str) -> str:
+    t = _norm(text)
+    if t in ("every day", "daily", "everyday"):
+        return "daily"
+    if t in ("every weekday", "on weekdays", "weekdays"):
+        return "weekdays"
+    if t in ("every weekend", "on weekends", "weekends"):
+        return "weekends"
+    m = re.match(r"^(?:every|on) (?P<day>\w+?)s?$", t)
+    if m and m["day"] in _WEEKDAY_NAMES:
+        return f"weekly:{_WEEKDAY_NAMES[m['day']]}"
+    return "none"
+
+
+def _recurrence_matches(d: date, recurrence: str) -> bool:
+    if recurrence in ("none", "daily"):
+        return True
+    if recurrence == "weekdays":
+        return d.weekday() < 5
+    if recurrence == "weekends":
+        return d.weekday() >= 5
+    if recurrence.startswith("weekly:"):
+        return d.weekday() == int(recurrence.split(":", 1)[1])
+    raise ValueError(f"unknown recurrence {recurrence!r}")
+
+
+def next_occurrence(*, after: datetime, hour: int, minute: int, recurrence: str) -> datetime:
+    """First LOCAL_TZ datetime strictly after `after` at hour:minute matching
+    the recurrence day-filter. Wall-clock math -> DST-safe."""
+    for days in range(0, 9):
+        cand = _combine(after.date() + timedelta(days=days), hour, minute)
+        if cand > after and _recurrence_matches(cand.date(), recurrence):
+            return cand
+    raise AssertionError("unreachable: 9 days always contains a match")
