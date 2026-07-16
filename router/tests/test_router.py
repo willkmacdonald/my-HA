@@ -111,26 +111,92 @@ async def test_device_action_http_error_returns_spoken_error_not_success(client)
     assert resp.json() == {"speech": router.ERROR_SPEECH, "intent": "error"}
 
 
+def _ob_payload(*sims: float) -> dict:
+    return {
+        "thoughts": [
+            {
+                "content": f"note {i} content",
+                "similarity": s,
+                "id": f"id-{i}",
+                "created_at": "2026-07-01T00:00:00Z",
+            }
+            for i, s in enumerate(sims)
+        ],
+        "total": len(sims),
+        "query": "q",
+    }
+
+
+class _FakeAnthropic:
+    """Duck-typed messages.create capturing the synthesis call."""
+
+    def __init__(self, reply: str) -> None:
+        self.calls: list[dict] = []
+        outer = self
+
+        class _Messages:
+            async def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                from types import SimpleNamespace
+
+                return SimpleNamespace(content=[SimpleNamespace(text=reply)])
+
+        self.messages = _Messages()
+
+
 @respx.mock
-async def test_ask_open_brain_returns_first_hit_summary(
+async def test_ask_open_brain_synthesizes_from_filtered_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
-    respx.post("http://ob.local/search").mock(
-        return_value=Response(200, json=[{"summary": "You picked the ND91-4."}])
+    monkeypatch.setattr(router, "OPEN_BRAIN_API_KEY", "test-key")
+    search = respx.post("http://ob.local/api/search").mock(
+        return_value=Response(200, json=_ob_payload(0.9, 0.6, 0.3))
     )
+    fake = _FakeAnthropic("You picked the ND91-4 driver.")
     async with httpx.AsyncClient() as http:
-        result = await router.ask_open_brain("speaker choice", http, None)
-    assert result == "You picked the ND91-4."
+        speech = await router.ask_open_brain("speaker choice", http, fake)
+
+    assert speech == "You picked the ND91-4 driver."
+    req = search.calls[0].request
+    assert req.headers["X-API-Key"] == "test-key"
+    import json as _json
+
+    assert _json.loads(req.content) == {"query": "speaker choice", "limit": 5}
+    prompt_text = fake.calls[0]["messages"][0]["content"]
+    assert "note 0 content" in prompt_text and "note 1 content" in prompt_text
+    assert "note 2 content" not in prompt_text  # similarity 0.3 < 0.55 filtered
 
 
 @respx.mock
-async def test_ask_open_brain_empty_hits(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ask_open_brain_no_hits_above_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
-    respx.post("http://ob.local/search").mock(return_value=Response(200, json=[]))
+    respx.post("http://ob.local/api/search").mock(return_value=Response(200, json=_ob_payload(0.2)))
     async with httpx.AsyncClient() as http:
-        result = await router.ask_open_brain("nothing", http, None)
-    assert result == "I didn't find anything on that."
+        speech = await router.ask_open_brain("nothing", http, _FakeAnthropic("x"))
+    assert speech == "I didn't find anything about that."
+
+
+@respx.mock
+async def test_ask_open_brain_unreachable_distinct_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
+    respx.post("http://ob.local/api/search").mock(side_effect=httpx.ConnectError("boom"))
+    async with httpx.AsyncClient() as http:
+        speech = await router.ask_open_brain("anything", http, _FakeAnthropic("x"))
+    assert speech == "I couldn't reach my notes."
+
+
+@respx.mock
+async def test_ask_open_brain_401_treated_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
+    respx.post("http://ob.local/api/search").mock(return_value=Response(401))
+    async with httpx.AsyncClient() as http:
+        speech = await router.ask_open_brain("anything", http, _FakeAnthropic("x"))
+    assert speech == "I couldn't reach my notes."
 
 
 # --- lifespan wiring ---

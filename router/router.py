@@ -36,6 +36,11 @@ SYSTEM_PROMPT = (
     "reply in one or two short sentences, no markdown, no lists."
 )
 
+SYNTH_PROMPT = (
+    "Answer the question in one or two short spoken sentences using only "
+    "these notes; if the notes don't answer it, say so."
+)
+
 ERROR_SPEECH = "Sorry, something went wrong answering that."
 
 log = logging.getLogger("router")
@@ -120,12 +125,30 @@ async def run_device_action(intent: dict, match: re.Match, http: httpx.AsyncClie
 
 
 async def ask_open_brain(query: str, http: httpx.AsyncClient, anthropic: AsyncAnthropic) -> str:
-    resp = await http.post(f"{OPEN_BRAIN_URL}/search", json={"query": query})
-    resp.raise_for_status()
-    # TODO(will): shape this once the Open Brain voice-answer endpoint settles —
-    # probably want a synthesized one-liner, not raw search hits.
-    hits = resp.json()
-    return hits[0]["summary"] if hits else "I didn't find anything on that."
+    """Spec Component 5: search Open Brain, filter by similarity, synthesize
+    a spoken answer with one Claude call. 'Found nothing' and 'couldn't
+    reach' are deliberately distinct spoken outcomes."""
+    try:
+        resp = await http.post(
+            f"{OPEN_BRAIN_URL}/api/search",
+            headers={"X-API-Key": OPEN_BRAIN_API_KEY},
+            json={"query": query, "limit": 5},
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        log.exception("open brain search failed")
+        return "I couldn't reach my notes."
+    hits = [t for t in resp.json().get("thoughts", []) if t.get("similarity", 0) >= 0.55]
+    if not hits:
+        return "I didn't find anything about that."
+    notes = "\n\n".join(t["content"] for t in hits)
+    msg = await anthropic.messages.create(
+        model=LLM_MODEL,
+        max_tokens=300,
+        system=SYNTH_PROMPT,
+        messages=[{"role": "user", "content": f"Notes:\n{notes}\n\nQuestion: {query}"}],
+    )
+    return msg.content[0].text
 
 
 async def ask_llm(text: str, anthropic: AsyncAnthropic) -> str:
