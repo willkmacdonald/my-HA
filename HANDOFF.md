@@ -24,7 +24,10 @@ Piper TTS. No Home Assistant. Roadmap:
 1. ~~Confirm the Phase 2 spec~~ — **done 2026-07-15**: signed off with four
    audit-review edits (see the spec's "Matching precision & dispatch safety"
    block and the STT error-frame carry-over).
-2. Invoke `superpowers:writing-plans` → implementation plan for Phase 2.
+2. ~~Write the implementation plan~~ — **done 2026-07-16**: two plans in
+   `docs/superpowers/plans/` — `2026-07-16-phase2-openbrain-timers.md`
+   (my-HA, 13 TDD tasks) and `2026-07-16-open-brain-search-api-key.md`
+   (open-brain repo: middleware key auth + operator deploy checklist).
 3. Execute via `superpowers:subagent-driven-development` (worked well for
    Phase 1: haiku implementers on verbatim-code tasks, sonnet reviewers,
    fable for the final whole-branch review — that final review caught 2 real
