@@ -50,3 +50,10 @@ async def test_set_status_and_rearm(store: timers.TimerStore) -> None:
 
 async def test_wal_mode_enabled(store: timers.TimerStore) -> None:
     assert await store.journal_mode() == "wal"
+
+
+def test_to_utc_iso_rejects_naive_datetime() -> None:
+    from datetime import datetime as _dt
+
+    with pytest.raises(ValueError, match="aware datetime"):
+        timers.to_utc_iso(_dt(2026, 7, 16, 9, 0, 0))

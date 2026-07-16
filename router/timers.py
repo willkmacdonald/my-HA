@@ -40,6 +40,8 @@ def utcnow() -> datetime:
 
 
 def to_utc_iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        raise ValueError("to_utc_iso requires an aware datetime; got naive input")
     return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
