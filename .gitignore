@@ -32,3 +32,6 @@ quality/runs/
 # projects; QPB's own convention is to gitignore it.
 quality/logs/
 quality/
+
+# Phase 2 timer store (spec Component 1) — runtime state, never committed
+router/timers.db*

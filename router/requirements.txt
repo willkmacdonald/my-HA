@@ -4,3 +4,4 @@ httpx
 pyyaml
 pydantic
 anthropic
+aiosqlite
