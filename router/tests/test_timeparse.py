@@ -211,6 +211,21 @@ def test_reminder_recurring() -> None:
     assert p is not None and p.recurrence == "weekly:0"
 
 
+def test_reminder_with_capitalized_politeness_prefix() -> None:
+    p = parse("Please remind me to feed the cat at 8 pm")
+    assert p is not None and p.kind == "reminder" and p.text == "feed the cat"
+
+
+def test_reminder_with_hey_prefix_preserves_payload_casing() -> None:
+    p = parse("Hey remind me to email Dave at 8 pm")
+    assert p is not None and p.text == "email Dave"
+
+
+def test_set_timer_with_capitalized_politeness_prefix() -> None:
+    p = parse("Okay set a timer for 10 minutes")
+    assert p is not None and p.kind == "timer" and p.duration_seconds == 600
+
+
 def test_reminder_text_keeps_inner_at_rightmost_wins() -> None:
     p = parse("remind me to look at the mail at 8 pm")
     assert p is not None and p.text == "look at the mail"

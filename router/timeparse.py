@@ -245,7 +245,7 @@ _CANCEL_RE = re.compile(
 _QUERY_LEFT_RE = re.compile(r"^how long(?: is)? left(?: on (?:my|the) timers?)?$")
 _QUERY_LIST_RE = re.compile(r"^what (?P<kind>timer|alarm|reminder)s?(?: do i have)?$")
 
-_POLITENESS_RE = re.compile(r"^(?:please |hey |ok |okay |um |uh )+")
+_POLITENESS_RE = re.compile(r"^(?:please |hey |ok |okay |um |uh )+", re.IGNORECASE)
 
 
 def _strip_politeness(t: str) -> str:
