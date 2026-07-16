@@ -1,10 +1,11 @@
 """TimerStore + scheduler tests — temp DB per test (spec §Testing)."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 import timers
+from timeparse import LOCAL_TZ
 
 
 @pytest.fixture
@@ -57,3 +58,80 @@ def test_to_utc_iso_rejects_naive_datetime() -> None:
 
     with pytest.raises(ValueError, match="aware datetime"):
         timers.to_utc_iso(_dt(2026, 7, 16, 9, 0, 0))
+
+
+def _local(h: int, m: int = 0) -> datetime:
+    return datetime(2026, 7, 16, h, m, tzinfo=LOCAL_TZ)
+
+
+def _mk(
+    kind: str,
+    *,
+    fire_local: datetime | None = None,
+    text: str | None = None,
+    duration_seconds: int | None = None,
+    recurrence: str = "none",
+) -> timers.Timer:
+    fire = fire_local or _local(7)
+    return timers.Timer(
+        id="t1",
+        kind=kind,
+        text=text,
+        fire_at=timers.to_utc_iso(fire),
+        recurrence=recurrence,
+        duration_seconds=duration_seconds,
+        status="armed",
+        created_at=timers.to_utc_iso(timers.utcnow()),
+    )
+
+
+@pytest.mark.parametrize(
+    ("seconds", "noun", "adj"),
+    [
+        (600, "10 minutes", "10-minute"),
+        (60, "1 minute", "1-minute"),
+        (3600, "1 hour", "1-hour"),
+        (7200, "2 hours", "2-hour"),
+        (90, "90 seconds", "90-second"),
+        (5400, "90 minutes", "90-minute"),
+    ],
+)
+def test_duration_phrases(seconds: int, noun: str, adj: str) -> None:
+    assert timers.duration_noun(seconds) == noun
+    assert timers.duration_adj(seconds) == adj
+
+
+@pytest.mark.parametrize(
+    ("h", "m", "phrase"),
+    [(7, 0, "7 am"), (18, 30, "6:30 pm"), (12, 0, "noon"), (0, 0, "midnight"), (23, 5, "11:05 pm")],
+)
+def test_clock_phrase(h: int, m: int, phrase: str) -> None:
+    assert timers.clock_phrase(_local(h, m)) == phrase
+
+
+def test_announcement_speech_timer() -> None:
+    t = _mk("timer", duration_seconds=120)
+    assert timers.announcement_speech(t) == "Your 2-minute timer is done."
+
+
+def test_announcement_speech_alarm() -> None:
+    t = _mk("alarm", fire_local=_local(7))
+    assert timers.announcement_speech(t) == "It's 7 am. This is your alarm."
+
+
+def test_announcement_speech_reminder() -> None:
+    t = _mk("reminder", text="feed the cat")
+    assert timers.announcement_speech(t) == "Reminder: feed the cat."
+
+
+def test_remaining_phrase() -> None:
+    assert timers.remaining_phrase(492) == "8 minutes 12 seconds"
+    assert timers.remaining_phrase(60) == "1 minute"
+    assert timers.remaining_phrase(30) == "30 seconds"
+
+
+def test_recurrence_phrase() -> None:
+    assert timers.recurrence_phrase("none") == ""
+    assert timers.recurrence_phrase("daily") == " every day"
+    assert timers.recurrence_phrase("weekdays") == " every weekday"
+    assert timers.recurrence_phrase("weekly:0") == " every Monday"

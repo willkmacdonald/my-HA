@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
+from timeparse import LOCAL_TZ
 
 log = logging.getLogger("timers")
 
@@ -152,3 +153,69 @@ class TimerStore:
             (to_utc_iso(fire_at), timer_id),
         )
         await self._db.commit()
+
+
+_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _duration_parts(seconds: int) -> tuple[int, str]:
+    if seconds % 3600 == 0:
+        return seconds // 3600, "hour"
+    if seconds % 60 == 0:
+        return seconds // 60, "minute"
+    return seconds, "second"
+
+
+def duration_noun(seconds: int) -> str:
+    n, unit = _duration_parts(seconds)
+    return f"{n} {unit}" + ("s" if n != 1 else "")
+
+
+def duration_adj(seconds: int) -> str:
+    n, unit = _duration_parts(seconds)
+    return f"{n}-{unit}"
+
+
+def clock_phrase(dt_local: datetime) -> str:
+    h, m = dt_local.hour, dt_local.minute
+    if (h, m) == (12, 0):
+        return "noon"
+    if (h, m) == (0, 0):
+        return "midnight"
+    mer = "am" if h < 12 else "pm"
+    h12 = h % 12 or 12
+    return f"{h12} {mer}" if m == 0 else f"{h12}:{m:02d} {mer}"
+
+
+def recurrence_phrase(recurrence: str) -> str:
+    if recurrence == "none":
+        return ""
+    if recurrence == "daily":
+        return " every day"
+    if recurrence == "weekdays":
+        return " every weekday"
+    if recurrence == "weekends":
+        return " every weekend"
+    return f" every {_DAY_NAMES[int(recurrence.split(':', 1)[1])]}"
+
+
+def remaining_phrase(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    parts = []
+    if h:
+        parts.append(f"{h} hour" + ("s" if h != 1 else ""))
+    if m:
+        parts.append(f"{m} minute" + ("s" if m != 1 else ""))
+    if s or not parts:
+        parts.append(f"{s} second" + ("s" if s != 1 else ""))
+    return " ".join(parts)
+
+
+def announcement_speech(t: Timer) -> str:
+    if t.kind == "timer":
+        return f"Your {duration_adj(t.duration_seconds or 0)} timer is done."
+    if t.kind == "alarm":
+        return f"It's {clock_phrase(t.fire_at_dt.astimezone(LOCAL_TZ))}. This is your alarm."
+    return f"Reminder: {t.text}."
