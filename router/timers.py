@@ -7,13 +7,16 @@ all local-time math lives in timeparse.py.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
+import timeparse
 from timeparse import LOCAL_TZ
 
 log = logging.getLogger("timers")
@@ -219,3 +222,195 @@ def announcement_speech(t: Timer) -> str:
     if t.kind == "alarm":
         return f"It's {clock_phrase(t.fire_at_dt.astimezone(LOCAL_TZ))}. This is your alarm."
     return f"Reminder: {t.text}."
+
+
+AnnounceFn = Callable[[str, str, int], Awaitable[None]]
+
+CLARIFICATION = "Sorry, I didn't catch that. Try something like: set a timer for ten minutes."
+
+
+class Scheduler:
+    """One asyncio task: sleep until the earliest armed fire_at; wake early on
+    self.wake (set whenever a timer is created/cancelled). On fire: announce,
+    repeat every interval_s up to max_repeats, stop on ack."""
+
+    def __init__(
+        self,
+        store: TimerStore,
+        announce: AnnounceFn,
+        *,
+        interval_s: float = ANNOUNCE_INTERVAL_S,
+        max_repeats: int = ANNOUNCE_MAX_REPEATS,
+    ) -> None:
+        self._store = store
+        self._announce = announce
+        self._interval_s = interval_s
+        self._max_repeats = max_repeats
+        self.wake = asyncio.Event()
+        self._acks: dict[str, asyncio.Event] = {}
+
+    def ack(self, event_id: str) -> None:
+        ev = self._acks.get(event_id)
+        if ev is not None:
+            ev.set()
+
+    async def run(self) -> None:
+        while True:
+            nxt = await self._store.next_armed()
+            if nxt is None:
+                await self.wake.wait()
+                self.wake.clear()
+                continue
+            delay = (nxt.fire_at_dt - utcnow()).total_seconds()
+            if delay > 0:
+                try:
+                    await asyncio.wait_for(self.wake.wait(), timeout=delay)
+                    self.wake.clear()
+                    continue  # store changed — re-evaluate earliest
+                except TimeoutError:
+                    pass
+            await self._fire(nxt)
+
+    async def _fire(self, t: Timer) -> None:
+        await self._store.set_status(t.id, "firing")
+        speech = announcement_speech(t)
+        ev = asyncio.Event()
+        self._acks[t.id] = ev
+        try:
+            for n in range(1, self._max_repeats + 1):
+                await self._announce(t.id, speech, n)
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=self._interval_s)
+                    break
+                except TimeoutError:
+                    continue
+        finally:
+            self._acks.pop(t.id, None)
+        await self._resolve(t)
+
+    async def _resolve(self, t: Timer) -> None:
+        if t.recurrence == "none":
+            await self._store.set_status(t.id, "done")
+            return
+        local = t.fire_at_dt.astimezone(LOCAL_TZ)
+        nxt = timeparse.next_occurrence(
+            after=utcnow().astimezone(LOCAL_TZ),
+            hour=local.hour,
+            minute=local.minute,
+            recurrence=t.recurrence,
+        )
+        await self._store.rearm(t.id, nxt)
+
+
+async def recover(store: TimerStore) -> None:
+    """Restart recovery (spec): items stuck in 'firing' are treated as past-due
+    armed. Past-due armed: < MISSED_GRACE_S stale -> leave armed (run loop fires
+    immediately); older one-shots -> done (logged); older recurring -> re-arm."""
+    for t in await store.by_status("firing"):
+        await store.set_status(t.id, "armed")
+    now = utcnow()
+    for t in await store.by_status("armed"):
+        overdue = (now - t.fire_at_dt).total_seconds()
+        if overdue <= MISSED_GRACE_S:
+            continue
+        if t.recurrence == "none":
+            log.info("recovery: %s %s missed by %.0fs — marking done", t.kind, t.id, overdue)
+            await store.set_status(t.id, "done")
+        else:
+            local = t.fire_at_dt.astimezone(LOCAL_TZ)
+            nxt = timeparse.next_occurrence(
+                after=now.astimezone(LOCAL_TZ),
+                hour=local.hour,
+                minute=local.minute,
+                recurrence=t.recurrence,
+            )
+            await store.rearm(t.id, nxt)
+
+
+def _describe(t: Timer) -> str:
+    if t.kind == "timer":
+        return f"{duration_adj(t.duration_seconds or 0)} timer"
+    if t.kind == "alarm":
+        return f"{clock_phrase(t.fire_at_dt.astimezone(LOCAL_TZ))} alarm"
+    return f"reminder to {t.text}"
+
+
+async def handle_timer(verb: str, text: str, store: TimerStore, scheduler) -> str:
+    """Dispatch target for action type 'timer' (spec Component 4)."""
+    now_local = utcnow().astimezone(LOCAL_TZ)
+    parsed = timeparse.parse(text, now=now_local)
+    if parsed is None or parsed.verb != verb:
+        return CLARIFICATION
+
+    if verb == "set":
+        if parsed.kind == "timer":
+            fire = utcnow() + timedelta(seconds=parsed.duration_seconds)
+            await store.add(kind="timer", fire_at=fire, duration_seconds=parsed.duration_seconds)
+            scheduler.wake.set()
+            return f"Timer set for {duration_noun(parsed.duration_seconds)}."
+        if parsed.kind == "alarm":
+            await store.add(kind="alarm", fire_at=parsed.fire_at, recurrence=parsed.recurrence)
+            scheduler.wake.set()
+            return (
+                f"Alarm set for {clock_phrase(parsed.fire_at)}"
+                f"{recurrence_phrase(parsed.recurrence)}."
+            )
+        fire = parsed.fire_at or (utcnow() + timedelta(seconds=parsed.duration_seconds))
+        await store.add(
+            kind="reminder", fire_at=fire, text=parsed.text, recurrence=parsed.recurrence
+        )
+        scheduler.wake.set()
+        when = (
+            f"at {clock_phrase(parsed.fire_at)}"
+            if parsed.fire_at
+            else f"in {duration_noun(parsed.duration_seconds)}"
+        )
+        return (
+            f"Okay, I'll remind you to {parsed.text} {when}{recurrence_phrase(parsed.recurrence)}."
+        )
+
+    kind = parsed.kind or "timer"
+    matching = [t for t in await store.by_status("armed") if t.kind == kind]
+    if parsed.at_qualifier is not None:
+        h, m = parsed.at_qualifier
+        matching = [
+            t
+            for t in matching
+            if (lambda lt: (lt.hour % 12, lt.minute) == (h % 12, m))(
+                t.fire_at_dt.astimezone(LOCAL_TZ)
+            )
+        ]
+    if not matching:
+        return f"You don't have any {kind}s."
+
+    if verb == "cancel":
+        if parsed.cancel_all:
+            for t in matching:
+                await store.set_status(t.id, "cancelled")
+            scheduler.wake.set()
+            n = len(matching)
+            return f"Cancelled {n} {kind}" + ("s." if n != 1 else ".")
+        soonest = matching[0]  # by_status orders by fire_at
+        await store.set_status(soonest.id, "cancelled")
+        scheduler.wake.set()
+        return f"Cancelled your {_describe(soonest)}."
+
+    # query
+    parts: list[str] = []
+    for t in matching:
+        if t.kind == "timer":
+            left = (t.fire_at_dt - utcnow()).total_seconds()
+            parts.append(
+                f"Your {duration_adj(t.duration_seconds or 0)} timer has "
+                f"{remaining_phrase(left)} left."
+            )
+        elif t.kind == "alarm":
+            parts.append(
+                f"Alarm at {clock_phrase(t.fire_at_dt.astimezone(LOCAL_TZ))}"
+                f"{recurrence_phrase(t.recurrence)}."
+            )
+        else:
+            parts.append(
+                f"Reminder to {t.text} at {clock_phrase(t.fire_at_dt.astimezone(LOCAL_TZ))}."
+            )
+    return " ".join(parts)
