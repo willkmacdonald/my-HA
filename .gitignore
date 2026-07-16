@@ -3,3 +3,32 @@ __pycache__/
 .env
 .venv/
 .superpowers/
+# Quality Playbook — suggested .gitignore additions for adopters.
+#
+# Append these rules to your project's .gitignore. They cover the folders
+# the playbook reads from and writes to in v1.5.0. QPB's own repository
+# deliberately does NOT use these exact rules for quality/runs/ — QPB tracks
+# archived runs as bootstrap self-audit evidence. In a target project where
+# the runs are not evidence you need under version control, keeping them
+# out of the repo is usually what you want.
+
+# docs_gathered/ is NEVER tracked — AI chat history and other private
+# reference material. Mirrors the QPB-repo rule so behaviour is consistent
+# across target repos.
+docs_gathered/
+**/docs_gathered/
+
+# Archived QPB runs — bulk history. Uncomment the two lines below to track
+# them as project evidence (matches QPB's own convention). The top-level
+# index is always tracked so reviewers can scan run history without the
+# bulk.
+quality/runs/
+!quality/RUN_INDEX.md
+
+# v1.5.7 D3 centralized per-run logs (transcripts, control_prompts,
+# playbook log, run_state.jsonl, RUN_MODE.md). One subdirectory per run
+# at quality/logs/<run-id>/, plus a quality/logs/latest symlink. Per-run
+# log content is generally not version-control material for adopter
+# projects; QPB's own convention is to gitignore it.
+quality/logs/
+quality/
