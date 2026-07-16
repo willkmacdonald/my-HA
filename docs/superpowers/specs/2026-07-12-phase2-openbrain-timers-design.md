@@ -1,7 +1,9 @@
 # Phase 2: Open Brain + Timers — Design
 
-**Date:** 2026-07-12
-**Status:** Approved (Approach A: router-integrated scheduler + websocket push)
+**Date:** 2026-07-12 (audit-review edits 2026-07-15)
+**Status:** Signed off 2026-07-15 (Approach A: router-integrated scheduler + websocket
+push; incorporates four Quality Playbook audit-review edits — see "Matching precision
+& dispatch safety" and the STT error-frame carry-over)
 
 Implements Phase 2 of the [project roadmap](2026-07-11-project-phases-design.md).
 Everything runs on the Mac against the fake satellite; the Pi inherits it all
@@ -117,6 +119,9 @@ scheduler keeps repeating on schedule (satellites may reconnect mid-loop).
   unacknowledged. The foreground loop's Enter press checks it first:
   if set → send ack (via a queue to the listener thread), skip recording;
   else → normal push-to-talk turn.
+- `EOFError` from `input()` (closed/redirected stdin) is treated like
+  Ctrl-C: stop the listener thread and exit cleanly. It must not fall into
+  the generic per-turn handler, which would busy-loop at CPU speed.
 - `speak()` gains no changes; chime is separate.
 - The Pi's `satellite.py` adopts the same listener in Phase 4 (aplay chime,
   Piper speech, "stop" ack) — out of scope here, protocol designed for it.
@@ -149,6 +154,19 @@ Ambiguity rules (explicit): "cancel the timer" with multiple armed timers
 cancels the one expiring soonest and says which; "how long left" with
 multiple lists all of them.
 
+Matching precision & dispatch safety (audit review, 2026-07-15):
+
+- Timer intents are listed **before** device intents in intents.yaml; all
+  command patterns are anchored to the utterance start (allowing optional
+  politeness prefixes and trailing punctuation), and the reminder `<text>`
+  slot is captured after the verb phrase so embedded command n-grams
+  ("…turn on the porch lights…") never re-enter matching.
+- A matched intent whose `action.type` (or timer `verb`) has no dispatch
+  branch is a config error, not LLM material: log a warning and speak
+  "I don't know how to do that yet." At startup the router validates that
+  every `action.type`/`verb` declared in intents.yaml has a registered
+  handler, and fails fast on mismatch.
+
 ## Component 5: Open Brain integration
 
 **open-brain repo (separate, small change):** `/api/search` accepts
@@ -179,6 +197,12 @@ in `intents.yaml` stay as-is.
   TLS handshakes.
 - **`pipeline.transcribe` receive timeout** (`asyncio.timeout(60)`), so a
   wedged STT server can't hang a satellite forever.
+- **STT error frame** (pairs with the timeout): `stt_server` wraps
+  post-END transcription in try/except and replies
+  `{"text": "", "error": "<exception class>"}` before closing;
+  `pipeline.transcribe` treats an error reply as an immediate turn
+  failure instead of stalling to the deadline. (Touches
+  `server/stt_server.py` — accepted scope addition, 2026-07-15.)
 - **`py_compile` smoke test** for `satellite.py` in the Mac test suite.
 
 Still deferred (unchanged from roadmap): STT buffer cap, binding to the
@@ -198,6 +222,16 @@ Tailscale IP — Phase 4 material.
 
 - **`timeparse` unit tests:** table-driven over all supported forms +
   rejection cases.
+- **Intent-matching collision tests:** the verified mis-route transcripts
+  from the 2026-07-15 audit ("what did I decide about the kitchen lights
+  on the porch", "don't turn on the kitchen lights", "The lights on my
+  dashboard are red, what does that mean", "check my notes about office
+  lights off schedule") plus "remind me to turn on the porch lights at 8"
+  and "remind me to check my notes at 8 pm" all route to the intended
+  intent — no device/knowledge hijacks.
+- **Dispatch-guard tests:** an intent with an unknown `action.type`/`verb`
+  yields the clarification speech (never `ask_llm`); startup validation
+  rejects an intents.yaml declaring an unhandled type.
 - **Scheduler tests:** temp DB, `ANNOUNCE_INTERVAL_S` shrunk via
   monkeypatch — fire, repeat, ack-stops-repeats, recurrence re-arm,
   restart recovery (new scheduler instance over the same DB), missed-grace
@@ -209,6 +243,9 @@ Tailscale IP — Phase 4 material.
   synthesis path, no-hits path, unreachable path.
 - **Fake satellite tests:** listener message handling with a fake ws server
   (same pattern as `test_pipeline.py`); ack queueing.
+- **STT error-frame test:** fake whisper model raising → client receives
+  the `{"text": "", "error": ...}` reply and `transcribe` surfaces a turn
+  failure (no 60 s stall, no bare disconnect).
 
 ## Exit criteria
 

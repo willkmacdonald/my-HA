@@ -16,12 +16,14 @@ Piper TTS. No Home Assistant. Roadmap:
 |---|---|
 | 0 — Procurement | ✅ Ordered 2026-07-11: XVF3800 w/ XIAO ESP32-S3 (case version) + Dayton ND91-4 driver. **Check if delivered** — arrival unblocks Phase 3. |
 | 1 — Mac backend + fake satellite | ✅ **Complete 2026-07-12.** Both exit criteria passed (spoken Q&A loop works; real-key LLM check works). 23 tests green. |
-| 2 — Open Brain + timers | 📝 Spec written & committed: [docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md](docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md). Design approved in discussion; **Will has not yet signed off on the written spec** — that's the immediate gate. |
+| 2 — Open Brain + timers | ✅ **Spec signed off 2026-07-15** with four Quality Playbook audit-review edits (dispatch guard, matching precision, EOF handling, STT error frame): [docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md](docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md). Next: implementation plan. |
 | 3+ | Blocked on hardware delivery. |
 
 ## Immediate next steps (in order)
 
-1. Ask Will to confirm the Phase 2 spec (or apply his edits).
+1. ~~Confirm the Phase 2 spec~~ — **done 2026-07-15**: signed off with four
+   audit-review edits (see the spec's "Matching precision & dispatch safety"
+   block and the STT error-frame carry-over).
 2. Invoke `superpowers:writing-plans` → implementation plan for Phase 2.
 3. Execute via `superpowers:subagent-driven-development` (worked well for
    Phase 1: haiku implementers on verbatim-code tasks, sonnet reviewers,
@@ -68,7 +70,10 @@ Piper TTS. No Home Assistant. Roadmap:
 - `quality-playbook` plugin v1.5.8 installed from the official marketplace
   (`andrewstellman/quality-playbook`) — `/quality-playbook` works in any
   fresh session. Agreed timing: most valuable **after Phase 2 lands**
-  (audit the scheduler/websocket code once it exists).
+  (audit the scheduler/websocket code once it exists). Playbook Phase 1
+  (exploration) already ran 2026-07-15 on this machine — findings live in
+  the gitignored `quality/` tree (9 candidate bugs; 4 promoted into the
+  Phase 2 spec). Resume after Phase 2 with "Run quality playbook phase 2".
 - Workflow: superpowers plugin (v6.1.1) — brainstorm → spec → writing-plans →
   subagent-driven-development, specs/plans under `docs/superpowers/`.
 - Solo-dev git: commit directly to `main`, push after meaningful units.
