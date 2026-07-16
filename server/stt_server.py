@@ -9,12 +9,15 @@ Usage:
 """
 
 import asyncio
+import logging
 import os
 from functools import lru_cache
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from faster_whisper import WhisperModel
+
+log = logging.getLogger("stt_server")
 
 MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 
@@ -43,10 +46,18 @@ async def stt(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         return
 
-    audio = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _ = await asyncio.to_thread(
-        lambda: get_model().transcribe(audio, language="en", vad_filter=True)
-    )
-    text = " ".join(seg.text.strip() for seg in segments)
+    try:
+        audio = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
+        segments, _ = await asyncio.to_thread(
+            lambda: get_model().transcribe(audio, language="en", vad_filter=True)
+        )
+        text = " ".join(seg.text.strip() for seg in segments)
+    except Exception as exc:
+        # Spec (carry-over, 2026-07-15): never close with no reply — the client
+        # pairs this with its 60 s deadline and fails the turn immediately.
+        log.exception("transcription failed")
+        await ws.send_json({"text": "", "error": type(exc).__name__})
+        await ws.close()
+        return
     await ws.send_json({"text": text})
     await ws.close()

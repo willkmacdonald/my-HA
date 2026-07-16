@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pipeline
+import pytest
 import websockets
 
 # --- rms ---
@@ -97,3 +98,28 @@ async def test_transcribe_streams_chunks_and_reads_reply() -> None:
     assert text == "hi there"
     assert b"".join(received) == payload
     assert len(received) > 1  # actually chunked, not one blob
+
+
+async def test_transcribe_raises_on_error_frame() -> None:
+    async def handler(ws) -> None:  # noqa: ANN001
+        async for msg in ws:
+            if msg == "END":
+                await ws.send(json.dumps({"text": "", "error": "ValueError"}))
+                break
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        with pytest.raises(RuntimeError, match="STT server error: ValueError"):
+            await pipeline.transcribe(b"\x01\x02", f"ws://127.0.0.1:{port}/stt")
+
+
+async def test_transcribe_times_out_on_silent_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def handler(ws) -> None:  # noqa: ANN001
+        async for _ in ws:
+            pass  # never replies
+
+    monkeypatch.setattr(pipeline, "STT_TIMEOUT_S", 0.2)
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        with pytest.raises(TimeoutError):
+            await pipeline.transcribe(b"\x01\x02", f"ws://127.0.0.1:{port}/stt")

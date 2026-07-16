@@ -62,3 +62,16 @@ def test_stt_multiple_chunks_are_concatenated(monkeypatch: pytest.MonkeyPatch) -
         ws.receive_json()
 
     assert len(captured["audio"]) == 200
+
+
+def test_stt_transcription_failure_sends_error_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(audio, **kwargs):
+        raise ValueError("bad buffer")
+
+    monkeypatch.setattr(stt_server, "get_model", lambda: SimpleNamespace(transcribe=boom))
+    client = TestClient(stt_server.app)
+    with client.websocket_connect("/stt") as ws:
+        ws.send_bytes(np.zeros(10, dtype=np.int16).tobytes())
+        ws.send_text("END")
+        reply = ws.receive_json()
+    assert reply == {"text": "", "error": "ValueError"}

@@ -5,6 +5,7 @@ push-to-talk). Keeping this shared is the point: the fake satellite must
 exercise the exact code the real one runs.
 """
 
+import asyncio
 import json
 from typing import Protocol
 
@@ -13,6 +14,7 @@ import websockets
 
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 1280  # 80 ms, openWakeWord's expected frame size
+STT_TIMEOUT_S = 60
 
 
 class AudioStream(Protocol):
@@ -58,11 +60,18 @@ def record_utterance(
 
 
 async def transcribe(audio: bytes, stt_url: str) -> str:
-    """Stream PCM chunks to the STT server, get the transcript back."""
-    async with websockets.connect(stt_url, max_size=None) as ws:
-        chunk = FRAME_SAMPLES * 2 * 10  # ~0.8 s per chunk
-        for i in range(0, len(audio), chunk):
-            await ws.send(audio[i : i + chunk])
-        await ws.send("END")
-        reply = json.loads(await ws.recv())
+    """Stream PCM chunks to the STT server, get the transcript back.
+
+    Bounded by STT_TIMEOUT_S (spec carry-over: a wedged STT server must not
+    hang a satellite forever). An error reply from the server raises
+    RuntimeError immediately instead of stalling to the deadline."""
+    async with asyncio.timeout(STT_TIMEOUT_S):
+        async with websockets.connect(stt_url, max_size=None) as ws:
+            chunk = FRAME_SAMPLES * 2 * 10  # ~0.8 s per chunk
+            for i in range(0, len(audio), chunk):
+                await ws.send(audio[i : i + chunk])
+            await ws.send("END")
+            reply = json.loads(await ws.recv())
+    if reply.get("error"):
+        raise RuntimeError(f"STT server error: {reply['error']}")
     return reply["text"].strip()
