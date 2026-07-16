@@ -141,3 +141,129 @@ def test_next_occurrence_daily_preserves_wall_clock_across_dst() -> None:
     sun = timeparse.next_occurrence(after=sat, hour=7, minute=0, recurrence="daily")
     assert (sun.hour, sun.minute) == (7, 0)
     assert sun.utcoffset() != sat.utcoffset()
+
+
+# --- full utterance parsing ---
+
+NOW = _at(2026, 7, 16, 10, 0)  # Thursday 10:00 local
+
+
+def parse(text: str):
+    return timeparse.parse(text, now=NOW)
+
+
+# --- set timer ---
+
+
+def test_set_timer_digits() -> None:
+    p = parse("set a timer for 10 minutes")
+    assert p == timeparse.ParsedTimer(verb="set", kind="timer", duration_seconds=600)
+
+
+def test_set_timer_word_number_prefix_form() -> None:
+    p = parse("twenty minute timer")
+    assert p is not None and p.kind == "timer" and p.duration_seconds == 1200
+
+
+def test_set_timer_hour_and_a_half() -> None:
+    p = parse("start a timer for an hour and a half")
+    assert p is not None and p.duration_seconds == 5400
+
+
+# --- set alarm ---
+
+
+def test_set_alarm_explicit() -> None:
+    p = parse("set an alarm for 7 am")
+    assert p is not None and p.kind == "alarm" and p.recurrence == "none"
+    assert p.fire_at == _at(2026, 7, 17, 7, 0)  # 7 am tomorrow (7 am today has passed)
+
+
+def test_wake_me_up_bare_clock() -> None:
+    p = parse("wake me up at 6:30")
+    assert p is not None and p.kind == "alarm"
+    assert p.fire_at == _at(2026, 7, 16, 18, 30)  # next occurrence within 12 h
+
+
+def test_set_alarm_recurring_weekdays() -> None:
+    p = parse("set an alarm for 7 am every weekday")
+    assert p is not None and p.recurrence == "weekdays"
+    assert p.fire_at == _at(2026, 7, 17, 7, 0)  # Friday is a weekday
+
+
+# --- set reminder ---
+
+
+def test_reminder_at_clock() -> None:
+    p = parse("remind me to feed the cat at 8 pm")
+    assert p is not None and p.kind == "reminder" and p.text == "feed the cat"
+    assert p.fire_at == _at(2026, 7, 16, 20, 0)
+
+
+def test_reminder_in_duration() -> None:
+    p = parse("remind me to check the oven in 2 hours")
+    assert p is not None and p.kind == "reminder" and p.text == "check the oven"
+    assert p.duration_seconds == 7200
+
+
+def test_reminder_recurring() -> None:
+    p = parse("remind me to take out the trash at 8 pm every monday")
+    assert p is not None and p.recurrence == "weekly:0"
+
+
+def test_reminder_text_keeps_inner_at_rightmost_wins() -> None:
+    p = parse("remind me to look at the mail at 8 pm")
+    assert p is not None and p.text == "look at the mail"
+
+
+# --- cancel ---
+
+
+def test_cancel_the_timer() -> None:
+    p = parse("cancel the timer")
+    assert p == timeparse.ParsedTimer(verb="cancel", kind="timer")
+
+
+def test_cancel_all_timers() -> None:
+    p = parse("cancel all my timers")
+    assert p is not None and p.cancel_all is True and p.kind == "timer"
+
+
+def test_cancel_alarm_with_clock_qualifier() -> None:
+    p = parse("cancel my 7 am alarm")
+    assert p is not None and p.kind == "alarm" and p.at_qualifier == (7, 0)
+
+
+def test_cancel_reminders_plural_means_all() -> None:
+    p = parse("cancel my reminders")
+    assert p is not None and p.kind == "reminder" and p.cancel_all is True
+
+
+# --- query ---
+
+
+def test_query_how_long_left() -> None:
+    p = parse("how long is left on my timer")
+    assert p == timeparse.ParsedTimer(verb="query", kind="timer")
+
+
+def test_query_what_alarms() -> None:
+    p = parse("what alarms do I have")
+    assert p == timeparse.ParsedTimer(verb="query", kind="alarm")
+
+
+# --- rejection: unparseable -> None (spec: clarification, no state change) ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "set a timer",  # no duration
+        "set a timer for the pasta",  # no parseable duration
+        "set an alarm for 25",  # invalid clock
+        "remind me to feed the cat",  # reminder with no time
+        "please do something",  # not a timer utterance at all
+    ],
+)
+def test_parse_rejects(text: str) -> None:
+    assert parse(text) is None

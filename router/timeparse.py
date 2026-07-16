@@ -228,3 +228,100 @@ def next_occurrence(*, after: datetime, hour: int, minute: int, recurrence: str)
         if cand > after and _recurrence_matches(cand.date(), recurrence):
             return cand
     raise AssertionError("unreachable: 9 days always contains a match")
+
+
+_REC_TAIL = r"(?: (?P<rec>(?:every|on) [a-z ]+?|daily))?"
+
+_SET_TIMER_RE = re.compile(r"^(?:set|start) (?:a |an )?timer(?: for (?P<dur>.+))?$")
+_NUM_MIN_TIMER_RE = re.compile(r"^(?P<dur>.+?) timer$")
+_SET_ALARM_RE = re.compile(
+    rf"^(?:set (?:a |an )?alarm for|wake me(?: up)? at) (?P<clock>.+?){_REC_TAIL}$"
+)
+_REMIND_RE = re.compile(rf"^remind me to (?P<text>.+) (?P<prep>at|in) (?P<when>.+?){_REC_TAIL}$")
+_CANCEL_RE = re.compile(
+    r"^cancel (?P<all>all )?(?:my |the )?(?:(?P<clock>.+?) )?"
+    r"(?P<kind>timer|alarm|reminder)(?P<plural>s)?$"
+)
+_QUERY_LEFT_RE = re.compile(r"^how long(?: is)? left(?: on (?:my|the) timers?)?$")
+_QUERY_LIST_RE = re.compile(r"^what (?P<kind>timer|alarm|reminder)s?(?: do i have)?$")
+
+_POLITENESS_RE = re.compile(r"^(?:please |hey |ok |okay |um |uh )+")
+
+
+def _strip_politeness(t: str) -> str:
+    return _POLITENESS_RE.sub("", t)
+
+
+def parse(text: str, *, now: datetime) -> ParsedTimer | None:
+    """Parse a timer-family utterance. None = unparseable -> clarification."""
+    t = _strip_politeness(_norm(text))
+
+    if m := _SET_TIMER_RE.match(t):
+        dur = parse_duration(m["dur"]) if m["dur"] else None
+        if dur is None:
+            return None
+        return ParsedTimer(verb="set", kind="timer", duration_seconds=dur)
+
+    if (m := _NUM_MIN_TIMER_RE.match(t)) and parse_duration(m["dur"]) is not None:
+        return ParsedTimer(verb="set", kind="timer", duration_seconds=parse_duration(m["dur"]))
+
+    if m := _SET_ALARM_RE.match(t):
+        clock = parse_clock(m["clock"])
+        if clock is None:
+            return None
+        recurrence = parse_recurrence(m["rec"] or "")
+        hour, minute, explicit = clock
+        fire = resolve_clock(hour, minute, explicit, now=now)
+        if recurrence != "none" and not _recurrence_matches(fire.date(), recurrence):
+            fire = next_occurrence(after=now, hour=fire.hour, minute=minute, recurrence=recurrence)
+        return ParsedTimer(verb="set", kind="alarm", fire_at=fire, recurrence=recurrence)
+
+    # reminders: parse on the ORIGINAL text (minus politeness/punctuation) so the
+    # spoken payload keeps its casing; the greedy (?P<text>.+) makes the LAST
+    # at/in win ("look at the mail at 8 pm").
+    orig = _strip_politeness(re.sub(r"[.!?]+$", "", text.strip()))
+    if m := _REMIND_RE.match(orig.lower()):
+        span_text = orig[m.start("text") : m.end("text")]
+        recurrence = parse_recurrence(m["rec"] or "")
+        if m["prep"] == "at":
+            clock = parse_clock(m["when"])
+            if clock is None:
+                return None
+            hour, minute, explicit = clock
+            fire = resolve_clock(hour, minute, explicit, now=now)
+            if recurrence != "none" and not _recurrence_matches(fire.date(), recurrence):
+                fire = next_occurrence(
+                    after=now, hour=fire.hour, minute=minute, recurrence=recurrence
+                )
+            return ParsedTimer(
+                verb="set", kind="reminder", fire_at=fire, text=span_text, recurrence=recurrence
+            )
+        dur = parse_duration(m["when"])
+        if dur is None:
+            return None
+        return ParsedTimer(
+            verb="set",
+            kind="reminder",
+            duration_seconds=dur,
+            text=span_text,
+            recurrence=recurrence,
+        )
+
+    if m := _CANCEL_RE.match(t):
+        qualifier: tuple[int, int] | None = None
+        if m["clock"]:
+            clock = parse_clock(m["clock"])
+            if clock is None:
+                return None
+            qualifier = (clock[0], clock[1])
+        cancel_all = bool(m["all"]) or (bool(m["plural"]) and qualifier is None)
+        return ParsedTimer(
+            verb="cancel", kind=m["kind"], cancel_all=cancel_all, at_qualifier=qualifier
+        )
+
+    if _QUERY_LEFT_RE.match(t):
+        return ParsedTimer(verb="query", kind="timer")
+    if m := _QUERY_LIST_RE.match(t):
+        return ParsedTimer(verb="query", kind=m["kind"])
+
+    return None
