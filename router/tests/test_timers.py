@@ -220,6 +220,35 @@ async def test_recurring_rearms_after_ack(store: timers.TimerStore) -> None:
     assert got.fire_at_dt > timers.utcnow()
 
 
+def _fast_sleep(real_sleep):
+    async def fast(seconds):
+        await real_sleep(min(seconds, 0.02))
+
+    return fast
+
+
+async def test_scheduler_survives_poisoned_tick(
+    store: timers.TimerStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref: dict = {}
+    ann = Announcer(ref, ack_after=1)
+    s = timers.Scheduler(store, ann, interval_s=0.02, max_repeats=1)
+    ref["s"] = s
+    calls = {"n": 0}
+    real_next_armed = store.next_armed
+
+    async def flaky_next_armed():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient db error")
+        return await real_next_armed()
+
+    monkeypatch.setattr(store, "next_armed", flaky_next_armed)
+    monkeypatch.setattr(timers.asyncio, "sleep", _fast_sleep(timers.asyncio.sleep))
+    await store.add(kind="timer", fire_at=timers.utcnow(), duration_seconds=60)
+    await _run_until(s, lambda: bool(ann.calls), timeout=3.0)
+
+
 async def test_wake_event_reevaluates_earlier_timer(store: timers.TimerStore) -> None:
     ref: dict = {}
     ann = Announcer(ref, ack_after=1)
@@ -336,6 +365,31 @@ async def test_handle_timer_cancel_all(store: timers.TimerStore) -> None:
 async def test_handle_timer_cancel_none(store: timers.TimerStore) -> None:
     speech = await timers.handle_timer("cancel", "cancel the timer", store, StubScheduler())
     assert speech == "You don't have any timers."
+
+
+async def test_cancel_explicit_pm_cancels_pm_alarm_not_am(store: timers.TimerStore) -> None:
+    # Fixed local times (not derived via clock_phrase round-trip) — deterministic
+    # regardless of wall-clock time or DST at test run time.
+    tomorrow = (timers.utcnow().astimezone(LOCAL_TZ) + timedelta(days=1)).date()
+    am_local = datetime.combine(tomorrow, datetime.min.time().replace(hour=7), tzinfo=LOCAL_TZ)
+    pm_local = datetime.combine(tomorrow, datetime.min.time().replace(hour=19), tzinfo=LOCAL_TZ)
+    am = await store.add(kind="alarm", fire_at=am_local.astimezone(timers.UTC))
+    pm = await store.add(kind="alarm", fire_at=pm_local.astimezone(timers.UTC))
+    speech = await timers.handle_timer("cancel", "cancel my 7 pm alarm", store, StubScheduler())
+    assert (await store.get(pm.id)).status == "cancelled"
+    assert (await store.get(am.id)).status == "armed"
+    assert "7 pm" in speech
+
+
+async def test_cancel_bare_qualifier_matches_mod12(store: timers.TimerStore) -> None:
+    # Bare "7" (no am/pm) parses as at_qualifier (7, 0, False) — mod-12 match,
+    # so it cancels whichever 7-o'clock alarm is armed (here, the only one: 7 am).
+    tomorrow = (timers.utcnow().astimezone(LOCAL_TZ) + timedelta(days=1)).date()
+    am_local = datetime.combine(tomorrow, datetime.min.time().replace(hour=7), tzinfo=LOCAL_TZ)
+    am = await store.add(kind="alarm", fire_at=am_local.astimezone(timers.UTC))
+    speech = await timers.handle_timer("cancel", "cancel my 7 alarm", store, StubScheduler())
+    assert (await store.get(am.id)).status == "cancelled"
+    assert "7 am" in speech
 
 
 async def test_handle_timer_query_lists_remaining(store: timers.TimerStore) -> None:

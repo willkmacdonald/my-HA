@@ -116,7 +116,7 @@ class EventListener:
             except (OSError, websockets.WebSocketException, ExceptionGroup):
                 # TaskGroup wraps a reader ConnectionClosed in an ExceptionGroup;
                 # either way: reconnect with backoff.
-                pass
+                log.warning("events connection lost; reconnecting in %.0fs", backoff)
             if stopped or self._stop_async.is_set():
                 return
             try:

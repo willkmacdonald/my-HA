@@ -53,7 +53,9 @@ class ParsedTimer:
     text: str | None = None  # reminder payload
     recurrence: str = "none"
     cancel_all: bool = False
-    at_qualifier: tuple[int, int] | None = None  # (hour, minute) for "cancel my 7 am alarm"
+    # (hour24, minute, explicit) for "cancel my 7 am alarm"; explicit=False for
+    # bare "cancel my 7 alarm" (mod-12 match — could be either 7 am or 7 pm).
+    at_qualifier: tuple[int, int, bool] | None = None
 
 
 def _norm(text: str) -> str:
@@ -245,7 +247,7 @@ _CANCEL_RE = re.compile(
 _QUERY_LEFT_RE = re.compile(r"^how long(?: is)? left(?: on (?:my|the) timers?)?$")
 _QUERY_LIST_RE = re.compile(r"^what (?P<kind>timer|alarm|reminder)s?(?: do i have)?$")
 
-_POLITENESS_RE = re.compile(r"^(?:please |hey |ok |okay |um |uh )+", re.IGNORECASE)
+_POLITENESS_RE = re.compile(r"^(?:(?:please|hey|ok|okay|um|uh)[,.]? )+", re.IGNORECASE)
 
 
 def _strip_politeness(t: str) -> str:
@@ -308,12 +310,12 @@ def parse(text: str, *, now: datetime) -> ParsedTimer | None:
         )
 
     if m := _CANCEL_RE.match(t):
-        qualifier: tuple[int, int] | None = None
+        qualifier: tuple[int, int, bool] | None = None
         if m["clock"]:
             clock = parse_clock(m["clock"])
             if clock is None:
                 return None
-            qualifier = (clock[0], clock[1])
+            qualifier = (clock[0], clock[1], clock[2])
         cancel_all = bool(m["all"]) or (bool(m["plural"]) and qualifier is None)
         return ParsedTimer(
             verb="cancel", kind=m["kind"], cancel_all=cancel_all, at_qualifier=qualifier

@@ -228,6 +228,8 @@ def test_events_websocket_accepts_connection(client) -> None:
         ("how long is left on my timer", "timer_query"),
         ("turn on the kitchen lights", "lights_on"),
         ("kitchen lights off", "lights_off"),
+        ("Okay, set a timer for 10 minutes.", "timer_set"),
+        ("Hey, cancel my timer.", "timer_cancel"),
     ],
 )
 def test_intent_routing_precision(text: str, expected_intent: str) -> None:

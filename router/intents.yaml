@@ -11,46 +11,48 @@
 # Named groups in patterns are available as {slot} in action.url.
 #
 # _p is the politeness/filler prefix, inlined in every pattern:
-#   (?:please |hey |ok |okay |um |uh )*
+#   (?:(?:please|hey|ok|okay|um|uh)[,.]? )*
+# The optional [,.]? tolerates faster-whisper punctuating filler words, e.g.
+# "Okay, set a timer for 10 minutes." (comma after "Okay").
 
 intents:
   - name: timer_set
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*(?:set|start) (?:a |an )?timer\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*(?:\\w+[ -])+minute timer\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*set (?:a |an )?alarm\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*wake me(?: up)? at\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*remind me to\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:set|start) (?:a |an )?timer\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:\\w+[ -])+minute timer\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*set (?:a |an )?alarm\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*wake me(?: up)? at\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*remind me to\\b"
     action:
       type: timer
       verb: set
 
   - name: timer_cancel
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*cancel\\b.*\\b(?:timer|alarm|reminder)s?\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*cancel\\b.*\\b(?:timer|alarm|reminder)s?\\b"
     action:
       type: timer
       verb: cancel
 
   - name: timer_query
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*how long(?: is)? left\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*what (?:timer|alarm|reminder)s?\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*how long(?: is)? left\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*what (?:timer|alarm|reminder)s?\\b"
     action:
       type: timer
       verb: query
 
   - name: knowledge_query
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*what did (?:i|we) (?:decide|say|conclude)\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*check (?:my|the) (?:notes|brain)\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*what did (?:i|we) (?:decide|say|conclude)\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*check (?:my|the) (?:notes|brain)\\b"
     action:
       type: open_brain
 
   - name: lights_on
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*turn (?:on|up) the (?P<room>\\w+) lights?\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? on\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*turn (?:on|up) the (?P<room>\\w+) lights?\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? on\\b"
     action:
       type: device
       method: POST
@@ -60,8 +62,8 @@ intents:
 
   - name: lights_off
     patterns:
-      - "^(?:please |hey |ok |okay |um |uh )*turn off the (?P<room>\\w+) lights?\\b"
-      - "^(?:please |hey |ok |okay |um |uh )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? off\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*turn off the (?P<room>\\w+) lights?\\b"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?P<room>(?!the\\b|a\\b|an\\b|my\\b|our\\b)\\w+) lights? off\\b"
     action:
       type: device
       method: POST

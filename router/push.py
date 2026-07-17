@@ -64,4 +64,5 @@ class PushChannel:
             try:
                 await ws.send_text(frame)
             except Exception:
+                log.warning("dropping dead satellite connection")
                 self._conns.discard(ws)

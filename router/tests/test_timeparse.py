@@ -226,6 +226,17 @@ def test_set_timer_with_capitalized_politeness_prefix() -> None:
     assert p is not None and p.kind == "timer" and p.duration_seconds == 600
 
 
+def test_set_timer_with_comma_after_politeness_prefix() -> None:
+    # faster-whisper emits "Okay, set a timer..." with punctuation after the filler.
+    p = parse("Okay, set a timer for 10 minutes.")
+    assert p is not None and p.kind == "timer" and p.duration_seconds == 600
+
+
+def test_reminder_with_comma_after_politeness_prefix() -> None:
+    p = parse("Please, remind me to feed the cat at 8 pm")
+    assert p is not None and p.kind == "reminder" and p.text == "feed the cat"
+
+
 def test_reminder_text_keeps_inner_at_rightmost_wins() -> None:
     p = parse("remind me to look at the mail at 8 pm")
     assert p is not None and p.text == "look at the mail"
@@ -246,7 +257,7 @@ def test_cancel_all_timers() -> None:
 
 def test_cancel_alarm_with_clock_qualifier() -> None:
     p = parse("cancel my 7 am alarm")
-    assert p is not None and p.kind == "alarm" and p.at_qualifier == (7, 0)
+    assert p is not None and p.kind == "alarm" and p.at_qualifier == (7, 0, True)
 
 
 def test_cancel_reminders_plural_means_all() -> None:

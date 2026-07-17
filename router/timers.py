@@ -24,6 +24,7 @@ log = logging.getLogger("timers")
 ANNOUNCE_INTERVAL_S = 30
 ANNOUNCE_MAX_REPEATS = 10
 MISSED_GRACE_S = 300
+SCHEDULER_RETRY_S = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS timers (
@@ -256,20 +257,29 @@ class Scheduler:
 
     async def run(self) -> None:
         while True:
-            nxt = await self._store.next_armed()
-            if nxt is None:
-                await self.wake.wait()
+            try:
+                await self._tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("scheduler tick failed; retrying in %ds", SCHEDULER_RETRY_S)
+                await asyncio.sleep(SCHEDULER_RETRY_S)
+
+    async def _tick(self) -> None:
+        nxt = await self._store.next_armed()
+        if nxt is None:
+            await self.wake.wait()
+            self.wake.clear()
+            return
+        delay = (nxt.fire_at_dt - utcnow()).total_seconds()
+        if delay > 0:
+            try:
+                await asyncio.wait_for(self.wake.wait(), timeout=delay)
                 self.wake.clear()
-                continue
-            delay = (nxt.fire_at_dt - utcnow()).total_seconds()
-            if delay > 0:
-                try:
-                    await asyncio.wait_for(self.wake.wait(), timeout=delay)
-                    self.wake.clear()
-                    continue  # store changed — re-evaluate earliest
-                except TimeoutError:
-                    pass
-            await self._fire(nxt)
+                return  # store changed — re-evaluate earliest
+            except TimeoutError:
+                pass
+        await self._fire(nxt)
 
     async def _fire(self, t: Timer) -> None:
         await self._store.set_status(t.id, "firing")
@@ -372,14 +382,25 @@ async def handle_timer(verb: str, text: str, store: TimerStore, scheduler) -> st
     kind = parsed.kind or "timer"
     matching = [t for t in await store.by_status("armed") if t.kind == kind]
     if parsed.at_qualifier is not None:
-        h, m = parsed.at_qualifier
-        matching = [
-            t
-            for t in matching
-            if (lambda lt: (lt.hour % 12, lt.minute) == (h % 12, m))(
-                t.fire_at_dt.astimezone(LOCAL_TZ)
-            )
-        ]
+        h, m, explicit = parsed.at_qualifier
+        if explicit:
+            # explicit am/pm ("cancel my 7 pm alarm") -> exact 24-h hour match,
+            # so a 7 am and 7 pm alarm armed at once are never conflated.
+            matching = [
+                t
+                for t in matching
+                if (lambda lt: (lt.hour, lt.minute) == (h, m))(t.fire_at_dt.astimezone(LOCAL_TZ))
+            ]
+        else:
+            # bare qualifier ("cancel my 7 alarm") -> mod-12 match, ambiguous
+            # between am/pm by design (spec: bare clock resolves either way).
+            matching = [
+                t
+                for t in matching
+                if (lambda lt: (lt.hour % 12, lt.minute) == (h % 12, m))(
+                    t.fire_at_dt.astimezone(LOCAL_TZ)
+                )
+            ]
     if not matching:
         return f"You don't have any {kind}s."
 

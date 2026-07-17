@@ -90,7 +90,17 @@ async def lifespan(app: FastAPI):
     scheduler = timers.Scheduler(store, channel.broadcast_announce)
     channel.set_ack_handler(scheduler.ack)
     app.state.store, app.state.push, app.state.scheduler = store, channel, scheduler
-    tasks = [asyncio.create_task(scheduler.run()), asyncio.create_task(channel.ping_loop())]
+
+    def _log_task_death(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background task %s died", task.get_name(), exc_info=task.exception())
+
+    tasks = [
+        asyncio.create_task(scheduler.run(), name="scheduler"),
+        asyncio.create_task(channel.ping_loop(), name="ping-loop"),
+    ]
+    for t in tasks:
+        t.add_done_callback(_log_task_death)
     try:
         yield
     finally:
