@@ -63,8 +63,10 @@ python3 -m pytest   # all green before touching anything
        ../.venv/bin/python -m uvicorn router:app --host 0.0.0.0 --port 8200
    ```
 
-   (`OPEN_BRAIN_URL` is unset until Phase 2 — knowledge queries fall back
-   to the LLM.)
+   Phase 2 env (in `.env`): `OPEN_BRAIN_URL` (the Azure Container Apps URL) and
+   `OPEN_BRAIN_API_KEY` (Key Vault secret `ob-search-api-key`). Leave both unset
+   to route knowledge queries to the LLM instead. Timers persist in
+   `router/timers.db` (gitignored; override path with `TIMERS_DB`).
 
 **Fake satellite (no Pi needed):** with the STT server and router running,
 
@@ -73,6 +75,12 @@ cd satellite && ../.venv/bin/python3 fake_satellite.py
 ```
 
 press Enter, speak, hear the answer through the Mac speakers.
+
+**Timers (Phase 2):** with both services running, try "set a timer for 2
+minutes" — the fake satellite chimes and announces when it fires, repeating
+every 30 s (max 10×) until you press Enter. The satellite holds a websocket
+open to `ws://localhost:8200/events` (override with `EVENTS_URL`); timers
+survive router restarts.
 
 4. **Full loop** (on the Pi):
 
