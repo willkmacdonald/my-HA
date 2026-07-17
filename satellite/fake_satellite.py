@@ -68,15 +68,24 @@ class EventListener:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ack_queue: asyncio.Queue[str] | None = None
         self._stop_async: asyncio.Event | None = None
+        self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="events-listener")
 
     def start(self) -> None:
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, join_timeout: float = 5.0) -> None:
+        if self._thread.is_alive() and not self._ready.wait(timeout=join_timeout):
+            log.warning("events listener never finished starting; abandoning stop handshake")
         if self._loop is not None and self._stop_async is not None:
             self._loop.call_soon_threadsafe(self._stop_async.set)
-        self._thread.join(timeout=5)
+        self._thread.join(timeout=join_timeout)
+        if self._thread.is_alive():
+            log.warning(
+                "events listener did not stop within %.1fs (likely mid-utterance); "
+                "daemon thread will not block process exit",
+                join_timeout,
+            )
 
     def request_ack(self) -> None:
         """Called from the foreground thread on Enter during an announcement."""
@@ -91,6 +100,7 @@ class EventListener:
         self._loop = asyncio.get_running_loop()
         self._ack_queue = asyncio.Queue()
         self._stop_async = asyncio.Event()
+        self._ready.set()
         backoff = RECONNECT_MIN_S
         while not self._stop_async.is_set():
             stopped = False

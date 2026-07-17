@@ -148,6 +148,36 @@ def test_listener_replies_pong_to_ping(
         listener.stop()
 
 
+def test_stop_immediately_after_start_terminates_thread() -> None:
+    listener = fake_satellite.EventListener("ws://127.0.0.1:1/events")
+    listener.start()
+    listener.stop()
+    assert not listener._thread.is_alive()
+
+
+def test_stop_logs_warning_when_join_times_out(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import time
+
+    listener = fake_satellite.EventListener("ws://127.0.0.1:1/events")
+
+    # simulate a reader wedged in a long blocking call by making the thread
+    # ignore the stop signal for longer than the join timeout
+    def slow_run() -> None:
+        time.sleep(1.0)
+
+    monkeypatch.setattr(listener, "_run", slow_run)
+    listener._thread = threading.Thread(target=listener._run, daemon=True)
+    listener.start()
+    with caplog.at_level("WARNING", logger="fake_satellite"):
+        listener.stop(join_timeout=0.1)
+    assert any(
+        "did not stop within" in r.message or "never finished starting" in r.message
+        for r in caplog.records
+    )
+
+
 def test_main_exits_cleanly_on_eof(monkeypatch: pytest.MonkeyPatch) -> None:
     class StubListener:
         def __init__(self, url: str) -> None:
