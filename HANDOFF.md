@@ -16,7 +16,7 @@ Piper TTS. No Home Assistant. Roadmap:
 |---|---|
 | 0 — Procurement | ✅ Ordered 2026-07-11: XVF3800 w/ XIAO ESP32-S3 (case version) + Dayton ND91-4 driver. **Check if delivered** — arrival unblocks Phase 3. |
 | 1 — Mac backend + fake satellite | ✅ **Complete 2026-07-12.** Both exit criteria passed (spoken Q&A loop works; real-key LLM check works). 23 tests green. |
-| 2 — Open Brain + timers | ✅ **Spec signed off 2026-07-15** with four Quality Playbook audit-review edits (dispatch guard, matching precision, EOF handling, STT error frame): [docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md](docs/superpowers/specs/2026-07-12-phase2-openbrain-timers-design.md). Next: implementation plan. |
+| 2 — Open Brain + timers | 🔨 **my-HA code complete 2026-07-16** (13 tasks + final-review fixes via subagent-driven-dev; 176 tests green; commits 50b6612..2d51f84). Remaining: (a) open-brain repo companion plan (API-key auth + deploy) — [docs/superpowers/plans/2026-07-16-open-brain-search-api-key.md](docs/superpowers/plans/2026-07-16-open-brain-search-api-key.md), execute in that repo; (b) manual exit criteria with Will: 2-min timer surviving router restart + real Open Brain voice query. |
 | 3+ | Blocked on hardware delivery. |
 
 ## Immediate next steps (in order)

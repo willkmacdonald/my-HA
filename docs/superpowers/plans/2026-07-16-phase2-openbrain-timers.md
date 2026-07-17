@@ -2880,6 +2880,16 @@ Not subagent work — record results in the session:
 
 ---
 
+## Errata (recorded post-execution, 2026-07-16)
+
+Found during execution + final whole-branch review; the shipped code differs from this plan's text in three places — do not copy these plan snippets into Phase 4 work:
+
+1. **Task 12's `except* _StopSession: return` is a PEP 654 SyntaxError** (`return` is illegal directly inside `except*`). Shipped: flag-then-return workaround in `fake_satellite._main`, adjudicated semantically equivalent.
+2. **The politeness prefix `(?:please |hey |ok |okay |um |uh )*` is comma-blind** — Whisper emits "Okay, set a timer…", which misrouted to the LLM. Shipped: `(?:(?:please|hey|ok|okay|um|uh)[,.]? )*` in all intents.yaml patterns and `_POLITENESS_RE` (also `re.IGNORECASE`, needed on the original-cased reminder path).
+3. **The self-review's `at_qualifier` mod-12 rationale was wrong for explicit meridiems** — "cancel my 7 pm alarm" cancelled a 7 am alarm. Shipped: `at_qualifier` carries `(hour24, minute, explicit)`; exact-hour match when explicit, mod-12 only when bare.
+
+Also beyond plan text (review-driven hardening): naive-datetime guard in `timers.to_utc_iso`; `EventListener.stop()` readiness handshake + observable join timeout; scheduler per-tick exception supervision (`SCHEDULER_RETRY_S`) + lifespan task done-callbacks; eviction/reconnect warning logs.
+
 ## Self-Review (completed at plan-writing time)
 
 - **Spec coverage:** Component 1 → Tasks 4–6; Component 2 → Task 7 (+ endpoint in Task 8); Component 3 → Task 12; Component 4 → Tasks 1–3, 6, 9; Component 5 → Task 10 (+ companion open-brain plan); carry-over fixes → Tasks 8 (clients), 11 (timeout + error frame), 12 (py_compile); audit edits → Task 9 (precision + guard), Task 12 (EOF), Task 11 (error frame); error handling § → Tasks 6/7/10; testing § → every task; exit criteria → Task 13.
