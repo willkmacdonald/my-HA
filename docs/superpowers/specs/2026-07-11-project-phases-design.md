@@ -7,6 +7,23 @@ Companion to [requirements.md](../../requirements.md) and [hardware.md](../../ha
 This doc is the roadmap: what gets built, in what order, and why. Those docs
 hold the architecture and hardware detail.
 
+## Current status (as of 2026-08-09)
+
+> Keep this block updated as phases land — this doc is the roadmap-of-record.
+> Session-to-session baton-pass (findings, gotchas, how-it's-built) is in
+> [HANDOFF.md](../../../HANDOFF.md); deep execution detail is in `.superpowers/sdd/progress.md`.
+
+| Phase | Status |
+|---|---|
+| 0 — Procurement | ✅ Done 2026-07-11. Board **delivered 2026-08-09**. |
+| 1 — Mac backend + fake satellite | ✅ Done 2026-07-12 (both exit criteria passed). |
+| 2 — Open Brain + timers | ✅ **Done 2026-08-09** — 176 tests; Open Brain X-API-Key auth deployed to prod; both exit criteria passed live (voice knowledge query + timer surviving a router restart). 4 non-blocking follow-up findings logged (see HANDOFF.md "Open findings"). |
+| 3 — Board bring-up + wake-word gate | 🔜 **NEXT** — unblocked (board arrived). Go/no-go: >90% wake-word detection. |
+| 4 — Full loop on the Pi | ⬜ needs Phase 3. |
+| 5 — Enclosure + daily-driver hardening | ⬜ |
+| 6 — Music playback | ⬜ parked. |
+| 7 — ESP32 satellite v2 | ⬜ parked. |
+
 ## Scope decisions (settled 2026-07-11)
 
 - **v1 definition of done:** Q&A/general assistant (LLM fallback), Open Brain
