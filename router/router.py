@@ -191,9 +191,16 @@ async def route(utt: Utterance, request: Request) -> dict:
                 )
                 return {"speech": speech, "intent": intent["name"]}
             if kind == "open_brain":
+                topic = (match.groupdict().get("topic") or "").strip()
+                if not topic:
+                    # trigger fired but no topic captured — clarify, don't search
+                    return {
+                        "speech": "What would you like me to look up?",
+                        "intent": "knowledge_query",
+                    }
                 if OPEN_BRAIN_URL:
                     return {
-                        "speech": await ask_open_brain(text, state.http, state.anthropic),
+                        "speech": await ask_open_brain(topic, state.http, state.anthropic),
                         "intent": intent["name"],
                     }
                 # documented degradation: no Open Brain configured -> LLM fallback

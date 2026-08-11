@@ -143,6 +143,9 @@ class _FakeAnthropic:
 
         self.messages = _Messages()
 
+    async def close(self) -> None:
+        """No-op: satisfies lifespan teardown when injected into app.state."""
+
 
 @respx.mock
 async def test_ask_open_brain_synthesizes_from_filtered_hits(
@@ -356,3 +359,53 @@ def test_knowledge_query_bare_trigger_has_empty_topic(utterance: str) -> None:
 def test_knowledge_query_does_not_over_capture(utterance: str) -> None:
     name, _ = _topic(utterance)
     assert name != "knowledge_query", f"{utterance!r} was wrongly stolen by knowledge_query"
+
+
+# --- knowledge_query dispatch: cleaned topic reaches search; empty topic clarifies ---
+
+
+@respx.mock
+async def test_open_brain_searches_the_cleaned_topic_not_raw_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
+    monkeypatch.setattr(router, "OPEN_BRAIN_API_KEY", "k")
+    search = respx.post("http://ob.local/api/search").mock(
+        return_value=Response(
+            200,
+            json={
+                "thoughts": [{"content": "Braised leeks note", "similarity": 0.9, "id": "1"}],
+                "total": 1,
+                "query": "q",
+            },
+        )
+    )
+    monkeypatch.setattr(router, "ask_llm", AsyncMock(return_value="unused"))
+
+    with TestClient(router.app) as c:
+        # synthesis LLM: patch the anthropic client *after* lifespan startup,
+        # which otherwise overwrites app.state.anthropic with a real client.
+        router.app.state.anthropic = _FakeAnthropic("Here's your leek recipe.")
+        resp = c.post("/route", json={"text": "look for the leek recipe in my open brain"})
+
+    assert resp.json()["intent"] == "knowledge_query"
+    import json as _json
+
+    body = _json.loads(search.calls[0].request.content)
+    assert body == {"query": "the leek recipe", "limit": 5}  # cleaned topic, NOT the full utterance
+
+
+def test_open_brain_empty_topic_clarifies_without_searching(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # If a search were attempted with no Open Brain configured it'd fall to LLM;
+    # assert we get the clarification and ask_open_brain is never called.
+    called = AsyncMock()
+    monkeypatch.setattr(router, "ask_open_brain", called)
+    monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
+    resp = client.post("/route", json={"text": "open brain"})
+    assert resp.json() == {
+        "speech": "What would you like me to look up?",
+        "intent": "knowledge_query",
+    }
+    called.assert_not_awaited()
