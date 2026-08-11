@@ -76,6 +76,12 @@ cd satellite && ../.venv/bin/python3 fake_satellite.py
 
 press Enter, speak, hear the answer through the Mac speakers.
 
+**Ask Open Brain by voice:** name it in the request — e.g. "look for the leek
+recipe in my open brain", "ask open brain about X", "open brain, what do I have
+on X". "check my notes on X" also works. The router extracts the topic (here,
+"the leek recipe") and searches that, so trigger words don't pollute the search.
+Say just "open brain" with no topic and it asks what to look up.
+
 **Timers (Phase 2):** with both services running, try "set a timer for 2
 minutes" — the fake satellite chimes and announces when it fires, repeating
 every 30 s (max 10×) until you press Enter. The satellite holds a websocket
