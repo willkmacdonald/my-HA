@@ -35,7 +35,7 @@ def test_match_intent_lights_on() -> None:
 
 
 def test_match_intent_knowledge_query() -> None:
-    matched = router.match_intent("what did I decide about Foundry rate limits")
+    matched = router.match_intent("check my notes on Foundry rate limits")
     assert matched is not None
     intent, _ = matched
     assert intent["name"] == "knowledge_query"
@@ -60,7 +60,7 @@ def test_knowledge_intent_without_open_brain_falls_back_to_llm(
 ) -> None:
     monkeypatch.setattr(router, "OPEN_BRAIN_URL", "")
     monkeypatch.setattr(router, "ask_llm", AsyncMock(return_value="You decided X."))
-    resp = client.post("/route", json={"text": "what did I decide about Foundry"})
+    resp = client.post("/route", json={"text": "check my notes on Foundry"})
     assert resp.json() == {"speech": "You decided X.", "intent": "llm_fallback"}
 
 
@@ -219,7 +219,7 @@ def test_events_websocket_accepts_connection(client) -> None:
 @pytest.mark.parametrize(
     ("text", "expected_intent"),
     [
-        ("what did I decide about the kitchen lights on the porch", "knowledge_query"),
+        ("look for the kitchen lights schedule in my open brain", "knowledge_query"),
         ("check my notes about office lights off schedule", "knowledge_query"),
         ("remind me to turn on the porch lights at 8", "timer_set"),
         ("remind me to check my notes at 8 pm", "timer_set"),
@@ -302,3 +302,57 @@ def test_timer_set_end_to_end_through_route(client) -> None:
     resp = client.post("/route", json={"text": "how long is left on my timer"})
     assert resp.json()["intent"] == "timer_query"
     assert resp.json()["speech"].startswith("Your 10-minute timer has ")
+
+
+# --- knowledge_query topic extraction (2026-08-10 redesign) ---
+
+
+def _topic(text: str):
+    """Route text, return (intent_name, extracted_topic) or (None, None)."""
+    m = router.match_intent(text)
+    if not m:
+        return None, None
+    intent, match = m
+    return intent["name"], (match.groupdict().get("topic") or "").strip()
+
+
+@pytest.mark.parametrize(
+    ("utterance", "want_topic"),
+    [
+        ("look for the leek recipe in my open brain", "the leek recipe"),
+        ("search my open brain for the anthropic harness", "the anthropic harness"),
+        ("ask open brain about foundry rate limits", "foundry rate limits"),
+        ("open brain, what do I have on recipes", "recipes"),
+        ("check open brain for the leek recipe", "the leek recipe"),
+        ("check my notes on the leek recipe", "the leek recipe"),
+        ("hey, look for the harness article in my open brain", "the harness article"),
+    ],
+)
+def test_knowledge_query_extracts_topic(utterance: str, want_topic: str) -> None:
+    name, topic = _topic(utterance)
+    assert name == "knowledge_query", f"{utterance!r} routed to {name}, not knowledge_query"
+    assert topic == want_topic
+
+
+@pytest.mark.parametrize("utterance", ["open brain", "check my notes", "check my brain"])
+def test_knowledge_query_bare_trigger_has_empty_topic(utterance: str) -> None:
+    name, topic = _topic(utterance)
+    assert name == "knowledge_query"
+    assert topic == ""
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "what's the weather",
+        "set a timer for 2 minutes",
+        "turn on the kitchen lights",
+        "don't turn on the lights",
+        "cancel my timer",
+        "how long is left on my timer",
+        "what did I decide about the harness",  # decision pattern was removed
+    ],
+)
+def test_knowledge_query_does_not_over_capture(utterance: str) -> None:
+    name, _ = _topic(utterance)
+    assert name != "knowledge_query", f"{utterance!r} was wrongly stolen by knowledge_query"

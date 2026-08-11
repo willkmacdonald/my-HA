@@ -43,9 +43,22 @@ intents:
       verb: query
 
   - name: knowledge_query
+    # 2026-08-10 redesign: primary trigger "open brain", secondary "check my notes/brain".
+    # Each pattern captures (?P<topic>...) — the search topic — so trigger scaffolding
+    # ("look for", "in my open brain") never reaches the Open Brain search query.
+    # Order matters (first match wins): topic-bearing patterns before bare-trigger patterns.
     patterns:
-      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*what did (?:i|we) (?:decide|say|conclude)\\b"
-      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*check (?:my|the) (?:notes|brain)\\b"
+      # topic BETWEEN verb and "open brain": "look for <topic> in/from/on my open brain"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:look for|search for|find|get)\\s+(?P<topic>.+?)\\s+(?:in|from|on)\\s+(?:my\\s+|the\\s+)?open brain\\b"
+      # topic AFTER "for": "search my open brain for <topic>" / "check open brain for <topic>"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:search|check|look in|ask|search in)?\\s*(?:my\\s+|the\\s+)?open brain\\b.*?\\bfor\\s+(?P<topic>.+)"
+      # topic AFTER trigger, on/about lead-in optional: "ask open brain about <topic>", "open brain, what do I have on <topic>"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:ask\\s+)?(?:my\\s+|the\\s+)?open brain\\b[,\\s]+(?:.*?\\b(?:on|about)\\b\\s+)?(?P<topic>.+)"
+      # secondary: "check my/the notes/brain on/about/for <topic>"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*check (?:my|the) (?:notes|brain)\\b(?:\\s+(?:on|about|for)\\s+(?P<topic>.+))?"
+      # bare triggers (no topic) — matched last so topic-bearing forms win first:
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*(?:ask\\s+)?(?:my\\s+|the\\s+)?open brain\\s*$"
+      - "^(?:(?:please|hey|ok|okay|um|uh)[,.]? )*check (?:my|the) (?:notes|brain)\\s*$"
     action:
       type: open_brain
 
