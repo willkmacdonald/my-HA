@@ -29,7 +29,12 @@ from pydantic import BaseModel
 
 OPEN_BRAIN_URL = os.environ.get("OPEN_BRAIN_URL", "")
 OPEN_BRAIN_API_KEY = os.environ.get("OPEN_BRAIN_API_KEY", "")
+# Two models, each tuned to its job. Fallback Q&A is open-ended and rewards
+# Sonnet's reasoning; note-synthesis is a constrained "answer from these notes"
+# task where Haiku is both faster (~1.0s vs ~2.6s, measured) and tighter for
+# speech — so ask_open_brain uses SYNTH_MODEL, ask_llm keeps LLM_MODEL.
 LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-5")
+SYNTH_MODEL = os.environ.get("SYNTH_MODEL", "claude-haiku-4-5-20251001")
 
 SYSTEM_PROMPT = (
     "You are a home voice assistant. Answers are spoken aloud: "
@@ -153,7 +158,7 @@ async def ask_open_brain(query: str, http: httpx.AsyncClient, anthropic: AsyncAn
         return "I didn't find anything about that."
     notes = "\n\n".join(t["content"] for t in hits)
     msg = await anthropic.messages.create(
-        model=LLM_MODEL,
+        model=SYNTH_MODEL,
         max_tokens=300,
         system=SYNTH_PROMPT,
         messages=[{"role": "user", "content": f"Notes:\n{notes}\n\nQuestion: {query}"}],
