@@ -2,3 +2,7 @@ numpy
 sounddevice
 websockets
 requests
+# openwakeword: needed to run wakeword_bench.py on the Mac (board bring-up /
+# Phase 3). satellite.py itself is Pi-only, but the bench validates the wake
+# word from the Mac, so the model runtime must be installable here too.
+openwakeword

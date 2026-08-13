@@ -28,12 +28,62 @@ Practical consequences:
   var — point it at the XVF3800's playback device, not `default`.
 - Channel map on capture: by default the **left channel is the processed
   AEC/beamform output, the right channel is the ASR-tuned output** of the
-  auto-selected beam. Feed the ASR channel to openWakeWord/whisper. A
-  6-channel firmware variant additionally exposes the 4 raw mics (useful for
-  debugging, not for v1).
+  auto-selected beam. A 6-channel firmware variant additionally exposes the 4
+  raw mics (useful for debugging, not for v1). **Which channel to feed the wake
+  word is settled empirically by `wakeword_bench.py --capture-channel {left,right}`,
+  not assumed** — the winner (>90% detection) gets wired into `satellite.py`.
+  Measured 2026-08-13 on USB 2-ch firmware: both channels carry strong signal,
+  left (processed) hotter than right (RMS ~2250 vs ~1405 on a spoken phrase).
 - Configuration/tuning via the vendor's `xvf_host` tool (gain, AEC
-  parameters, LED effects); firmware variants: USB 2-ch (default), USB 6-ch,
-  I2S.
+  parameters, LED effects); firmware variants: USB 2-ch, USB 6-ch, I2S.
+
+## Firmware flashing (XIAO ESP32-S3 variant — done 2026-08-13)
+
+**Our board is the XIAO ESP32-S3 variant, which ships with I2S firmware** and
+therefore does NOT appear as a USB mic out of the box — plugged into a host it
+enumerates as an *"Espressif USB JTAG_serial debug unit"* (the ESP32-S3), not
+audio. For the v1 Pi satellite it must be reflashed to **USB 2-channel**
+firmware so the XMOS presents as a standard USB Audio Class 2.0 mic.
+
+**Two USB-C ports — this is the gotcha that cost the most time.** The board has
+two USB-C ports: one routes to the **ESP32-S3**, one to the **XMOS** chip.
+**Flashing (and USB-mic operation) requires the XMOS port — the one next to the
+3.5 mm headphone jack.** Plugging into the ESP32 port shows nothing usable and
+looks like a dead board (it also power-cycled/flickered on a marginal path).
+
+Working procedure (verified on macOS 2026-08-13, board came back as a mic):
+
+1. **Get the tools + firmware** (both reversible, no board risk):
+   ```
+   brew install dfu-util
+   git clone https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY.git ~/respeaker-xvf3800-fw
+   ```
+   USB firmware bins live in `~/respeaker-xvf3800-fw/xmos_firmwares/usb/`; we
+   flashed the latest 2-channel: `respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin`.
+   (Don't "Save As" individual GitHub files — they corrupt; clone or Download-ZIP.)
+2. **Cable into the XMOS port** (by the 3.5 mm jack).
+3. **Enter Safe Mode:** power the board off (unplug), **press and hold the Mute
+   button**, and while holding it plug the cable back in. The **red LED blinks**
+   = Safe Mode. In this state `dfu-util -l` shows three interfaces at
+   `[2886:001a]`: `alt=0` Factory, `alt=1` Upgrade, `alt=2` DataPartition.
+4. **Flash the Upgrade partition (`alt=1`):**
+   ```
+   dfu-util -R -e -a 1 -D ~/respeaker-xvf3800-fw/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin
+   ```
+   `Invalid DFU suffix signature` is a harmless warning; `-R` auto-reboots.
+5. **Verify:** it should re-enumerate as USB **"reSpeaker XVF3800 4-Mic Array"**
+   (vendor "Seeed Studio"), a **2-channel input at 16 kHz**. On macOS confirm
+   with `ioreg -p IOUSB -l | grep "USB Product Name"` and a sounddevice device
+   list. (It still answers DFU on the XMOS port even in run-time mode — normal.)
+
+**⚠️ Do NOT run `xvf_host save_configuration` casually.** Upstream
+[issue #8](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/issues/8)
+reports it corrupted the config partition so the board no longer enumerated as
+USB in normal mode — and a reflash did **not** fix it (no maintainer fix yet).
+Factory recovery image, if ever needed: `xmos_firmwares/recover/4mb_all_ff.bin`.
+
+**Reflash back to I2S** (for the Phase 7 ESP32-S3 satellite-v2 work) uses the
+same Safe-Mode + dfu-util flow with a bin from `xmos_firmwares/i2s/`.
 
 ## Enclosure (v1: functional, not furniture)
 
