@@ -34,8 +34,12 @@ from pipeline import FRAME_SAMPLES, SAMPLE_RATE, record_utterance, transcribe
 # with --capture-channel. (A plain mono mic would be CAPTURE_CHANNELS=1.)
 CAPTURE_CHANNELS = 2
 # Seconds of audio kept before wake-word detection and prepended to the
-# recording, so the start of the utterance isn't clipped (see the loop).
-PREROLL_SECONDS = 0.5
+# recording, so the start of an immediately-spoken question isn't clipped.
+# Kept short (0.25s) so it catches the question's front but does NOT reach back
+# into the tail of "Jarvis" (which would otherwise transcribe as "service" when
+# you pause after the wake word). record_utterance additionally requires a real
+# speech onset, so a pause-then-silence yields nothing rather than the tail.
+PREROLL_SECONDS = 0.25
 
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
@@ -144,6 +148,11 @@ def main() -> None:
             )
             recent.clear()  # don't leak this utterance's pre-roll into the next
             t_record = time.perf_counter()
+            if not audio:
+                # No speech after the wake word (e.g. woke by mistake, or you
+                # paused and said nothing) — skip STT and keep listening.
+                print("(no speech — listening again)")
+                continue
             text = asyncio.run(transcribe(audio, STT_URL))
             t_stt = time.perf_counter()
             print(f"heard: {text!r}")
