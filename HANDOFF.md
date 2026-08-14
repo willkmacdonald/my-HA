@@ -28,11 +28,49 @@ Piper TTS. No Home Assistant. Roadmap:
 
 ## What's next (roadmap replanned 2026-08-12)
 
-**Phase 4 — full loop on the Pi — is NEXT.** Will's sequencing (2026-08-12): hardware bring-up →
-wake word + >90% gate (both ✅ **done 2026-08-13**) → **full loop + live with it a while (Phase 4/5)**
+**Phase 5 — enclosure + daily-driver hardening — is NEXT.** Sequencing (2026-08-12): hardware →
+wake word + gate → full loop (Phases 3 + 4 all ✅ **DONE 2026-08-13**) → **live with it (Phase 5)**
 → *then* conversational (Phase 6). Conversational is deliberately gated on 3–5, because how
 conversation should *feel* is only knowable after daily use — do NOT start designing or building
 it before Phase 5.
+
+### Phase 4 — HOW THE PI IS SET UP (done 2026-08-13, so it's reproducible)
+
+The full loop runs in-room from the Pi and **auto-starts on boot**. Key facts + gotchas:
+
+- **Pi:** hostname `voicepi` (`voicepi.local`, Tailscale `100.122.67.83`), user `will` (uid 1000),
+  fresh **Debian 13 trixie**, 256GB microSD. SSH from Mac: `ssh will@voicepi.local`. Boots from the
+  SD (its old Home-Assistant boot *drive* is untouched — an empty SD slot earlier was a red herring).
+- **Mac backend** (must be running): STT `100.86.15.54:8100`, router `:8200`. Mac Tailscale IP
+  `100.86.15.54` (`wills-mac-studio`). Tailnet is `willkmacdonald.github` (GitHub SSO login).
+- **XVF3800 on the Pi:** plug its **XMOS USB-C port** into a Pi **blue USB-3** port. It's ALSA
+  **card "Array"**, sounddevice **index 0**. Playback works via `aplay -D plughw:CARD=Array,DEV=0`
+  (the Pi 5 has NO 3.5mm jack — headphones go in the **board's** jack).
+- **Python:** venv at `~/satellite-venv`. **openWakeWord pinned to 0.6.0 with ONNX**: `pip install
+  --no-deps openwakeword==0.6.0` (0.6.0's declared `tflite-runtime` dep has no py3.13/ARM wheel; ONNX
+  works). Then `python -m openwakeword.utils.download_models`. Code passes `inference_framework=onnx`
+  (the `--inference-framework` default). **Piper:** `pip install piper-tts` (activate the venv FIRST
+  or trixie's PEP-668 blocks it). Voice downloaded to **`/home/will/`** (NOT the satellite dir — this
+  cost time): `~/en_US-lessac-medium.onnx` + `.onnx.json`.
+- **Code on the Pi:** `git clone`d to `~/my-HA`; `git pull` to update.
+- **Run manually (for debugging):**
+  ```
+  cd ~/my-HA/satellite && STT_URL=ws://100.86.15.54:8100/stt ROUTER_URL=http://100.86.15.54:8200/route \
+    APLAY_DEVICE=plughw:CARD=Array,DEV=0 PIPER_VOICE=/home/will/en_US-lessac-medium.onnx \
+    ~/satellite-venv/bin/python satellite.py --device 0 --capture-channel right
+  ```
+  (`--no-speak` prints the reply instead of speaking — proves the pipeline without TTS.)
+- **Autostart = a systemd --user service** `~/.config/systemd/user/my-ha-satellite.service` with
+  `loginctl enable-linger will` (so it runs at boot without a login — needed because **audio is
+  session-bound**; a *system* service can't reach pipewire). The unit sets STT/ROUTER/APLAY/PIPER_VOICE
+  **and `PIPER_BIN=/home/will/satellite-venv/bin/piper`** — the last one is essential: systemd does
+  NOT inherit the venv PATH, so bare `piper` → `FileNotFoundError` and a crash-loop. Manage with
+  `systemctl --user {status,restart,stop} my-ha-satellite.service`; logs:
+  `journalctl --user-unit my-ha-satellite.service -f`. Service file also saved in this session's
+  scratchpad. **To make it run on a fresh session, this whole setup must exist on the Pi (not in the repo).**
+- **⚠️ Known gap = LATENCY.** The general-LLM path (`ask_llm`) still uses Sonnet; the reply delay is
+  noticeable and is exactly the "don't be 2–10× slower than Alexa" concern. Knowledge queries were
+  already sped up (Haiku synthesis); the general path is the next latency target.
 
 - **Phase 4 — full loop on the Pi.** The bench + channel wiring are validated on the **Mac** (board
   over USB, device index 1). Not yet run on the **Pi over Tailscale**. Phase 4 = `satellite.py` on

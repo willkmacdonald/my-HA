@@ -19,8 +19,8 @@ hold the architecture and hardware detail.
 | 1 — Mac backend + fake satellite | ✅ Done 2026-07-12 (both exit criteria passed). |
 | 2 — Open Brain + timers | ✅ **Done 2026-08-09** — 176 tests; Open Brain X-API-Key auth deployed to prod; both exit criteria passed live (voice knowledge query + timer surviving a router restart). 4 non-blocking follow-up findings logged (see HANDOFF.md "Open findings"). |
 | 3 — Board bring-up + wake-word gate | ✅ **GATE PASSED 2026-08-13.** Board flashed I2S→USB 2-ch firmware (v2.0.10); enumerates as a USB mic. `wakeword_bench.py` "hey jarvis": **both channels 20/20 (100%)** vs ~5% bare-mic baseline. Channel wired into `satellite.py` (`--capture-channel`, default right/ASR). Firmware procedure in [hardware.md](../../hardware.md). |
-| 4 — Full loop on the Pi | 🔜 **NEXT** — needs the Pi + board over Tailscale. Bench + wiring validated on the Mac; the loop itself is untested on-device. |
-| 5 — Enclosure + daily-driver hardening | ⬜ |
+| 4 — Full loop on the Pi | ✅ **DONE 2026-08-13.** Full in-room loop working from the Pi over Tailscale: "hey jarvis" → XVF3800 mic → wake word (Pi) → record → Whisper STT (Mac `100.86.15.54:8100`) → router (Mac `:8200`) → Claude → Piper TTS (Pi) → spoken through the board. Auto-starts on boot via a **systemd --user** service (linger enabled). Setup/gotchas in HANDOFF.md. **Known gap:** general-LLM-path latency (Sonnet) — the Alexa-gap, next project. |
+| 5 — Enclosure + daily-driver hardening | 🔜 **NEXT** — sealed box (ND91-4), speaker soldered to the board's JST out, closed-loop audio through the XVF3800 (currently TTS→board's 3.5mm jack w/ headphones, AEC not yet exercised), re-run wake bench in-box, a week of real use. |
 | 6 — Conversational paths | ⬜ **NEW** (added 2026-08-12) — committed; first post-hardening software push. Gated on 3–5 (real wake word + a week of daily use). See Phase 6 below. |
 | 7 — Music playback | ⬜ parked (was Phase 6). |
 | 8 — ESP32 satellite v2 | ⬜ parked (was Phase 7). |
