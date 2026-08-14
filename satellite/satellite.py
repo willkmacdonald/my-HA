@@ -74,6 +74,12 @@ def main() -> None:
         help="which XVF3800 channel to use (left=processed, right=ASR-tuned); "
         "feeds both wake-word detection and the Whisper recording",
     )
+    ap.add_argument(
+        "--no-speak",
+        action="store_true",
+        help="skip TTS — print the reply instead of speaking it. Lets the full "
+        "wake→record→STT→route pipeline be verified before Piper is installed.",
+    )
     args = ap.parse_args()
 
     oww = Model(wakeword_models=[args.wake_model], inference_framework=args.inference_framework)
@@ -108,7 +114,7 @@ def main() -> None:
             resp = requests.post(ROUTER_URL, json={"text": text}, timeout=60)
             speech = resp.json().get("speech", "")
             print(f"reply: {speech!r}")
-            if speech:
+            if speech and not args.no_speak:
                 speak(speech)
 
 
