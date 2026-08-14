@@ -60,6 +60,9 @@ The full loop runs in-room from the Pi and **auto-starts on boot**. Key facts + 
     ~/satellite-venv/bin/python satellite.py --device 0 --capture-channel right
   ```
   (`--no-speak` prints the reply instead of speaking — proves the pipeline without TTS.)
+- **Autostart VERIFIED through a full power cycle (2026-08-13):** Pi shut down (`sudo shutdown now`),
+  unplugged, replugged — came up answering "hey jarvis" on its own, no login/SSH. Only requirement:
+  the **Mac must be awake with STT :8100 + router :8200 running** (the Pi is just mic+speaker).
 - **Autostart = a systemd --user service** `~/.config/systemd/user/my-ha-satellite.service` with
   `loginctl enable-linger will` (so it runs at boot without a login — needed because **audio is
   session-bound**; a *system* service can't reach pipewire). The unit sets STT/ROUTER/APLAY/PIPER_VOICE
