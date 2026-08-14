@@ -3,6 +3,12 @@ __pycache__/
 .env
 .venv/
 .superpowers/
+
+# macOS folder metadata, local Claude Code config, and local skills — not project files
+.DS_Store
+.claude/
+cowork-skills/
+
 # Quality Playbook — suggested .gitignore additions for adopters.
 #
 # Append these rules to your project's .gitignore. They cover the folders
