@@ -19,7 +19,15 @@ from faster_whisper import WhisperModel
 
 log = logging.getLogger("stt_server")
 
-MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
+# Defaults tuned for latency on the Mac Studio (measured 2026-08-13): STT was
+# ~6s/utterance on `large-v3` + float32. CTranslate2 (faster-whisper's backend)
+# is CPU-only on macOS — no CUDA, no Metal/MPS — so a big model on CPU is the
+# bottleneck. `small.en` (English-only, ~500MB vs 3GB) + `int8` is dramatically
+# faster and plenty accurate for command-style speech. Override via env for
+# accuracy-sensitive use (e.g. WHISPER_MODEL=large-v3, WHISPER_COMPUTE=float32).
+MODEL = os.environ.get("WHISPER_MODEL", "small.en")
+COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")  # int8 | int8_float32 | float32 (CPU)
+DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # CPU-only on macOS; see note above
 
 app = FastAPI()
 
@@ -27,7 +35,7 @@ app = FastAPI()
 @lru_cache(maxsize=1)
 def get_model() -> WhisperModel:
     """Load whisper on first use, not at import — keeps tests and startup fast."""
-    return WhisperModel(MODEL, device="auto", compute_type="auto")
+    return WhisperModel(MODEL, device=DEVICE, compute_type=COMPUTE)
 
 
 @app.websocket("/stt")

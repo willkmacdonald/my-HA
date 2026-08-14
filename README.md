@@ -51,8 +51,13 @@ python3 -m pytest   # all green before touching anything
    cd server && ../.venv/bin/python -m uvicorn stt_server:app --host 0.0.0.0 --port 8100
    ```
 
-   First transcription request triggers a one-time model download (`WHISPER_MODEL=small`
-   is ~460 MB, useful for fast bring-up; the default `large-v3` is ~3 GB).
+   First transcription request triggers a one-time model download. **Default is
+   `WHISPER_MODEL=small.en` + `WHISPER_COMPUTE=int8`** — measured 2026-08-13 to
+   transcribe a 3.3 s command in ~1.25 s vs ~6.7 s for `large-v3`/`float32`, with
+   identical output on command speech (CTranslate2 is CPU-only on macOS — no Metal
+   — so a big model is the latency bottleneck). Override for accuracy-sensitive use:
+   `WHISPER_MODEL=large-v3 WHISPER_COMPUTE=float32`. Knobs: `WHISPER_MODEL`,
+   `WHISPER_COMPUTE` (`int8`/`int8_float32`/`float32`), `WHISPER_DEVICE` (`cpu`).
 
 3. **Router** (on the Mac). The Anthropic key lives in a gitignored `.env`
    at the repo root (`ANTHROPIC_API_KEY=…`, sourced from the `wkm-shared-kv`
