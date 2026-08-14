@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import asyncio
+import collections
 import os
 import subprocess
 import time
@@ -32,6 +33,9 @@ from pipeline import FRAME_SAMPLES, SAMPLE_RATE, record_utterance, transcribe
 # ASR-tuned output, so it's the default for the Whisper-facing stream. Override
 # with --capture-channel. (A plain mono mic would be CAPTURE_CHANNELS=1.)
 CAPTURE_CHANNELS = 2
+# Seconds of audio kept before wake-word detection and prepended to the
+# recording, so the start of the utterance isn't clipped (see the loop).
+PREROLL_SECONDS = 0.5
 
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
@@ -103,6 +107,14 @@ def main() -> None:
     oww = Model(wakeword_models=[args.wake_model], inference_framework=args.inference_framework)
     print(f"listening for wake word ({args.wake_model}) on the {args.capture_channel} channel…")
 
+    # Keep the last ~0.5 s of mono frames the wake-word loop reads, so when the
+    # wake word fires we can prepend them to the recording. People say
+    # "hey jarvis tell me a joke" as one phrase — without this, the audio spoken
+    # between wake-word detection and record_utterance starting is lost and the
+    # front of the utterance is clipped ("tell me a joke" → "that's a joke").
+    preroll_frames = max(1, round(PREROLL_SECONDS * SAMPLE_RATE / FRAME_SAMPLES))
+    recent: collections.deque[bytes] = collections.deque(maxlen=preroll_frames)
+
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=CAPTURE_CHANNELS,
@@ -115,6 +127,7 @@ def main() -> None:
             mono = select_channel(
                 bytes(raw), channel=args.capture_channel, n_channels=CAPTURE_CHANNELS
             )
+            recent.append(mono.tobytes())
             scores = oww.predict(mono)
             if max(scores.values()) < args.threshold:
                 continue
@@ -124,8 +137,12 @@ def main() -> None:
 
             t0 = time.perf_counter()
             audio = record_utterance(
-                stream, capture_channel=args.capture_channel, n_channels=CAPTURE_CHANNELS
+                stream,
+                preroll=b"".join(recent),
+                capture_channel=args.capture_channel,
+                n_channels=CAPTURE_CHANNELS,
             )
+            recent.clear()  # don't leak this utterance's pre-roll into the next
             t_record = time.perf_counter()
             text = asyncio.run(transcribe(audio, STT_URL))
             t_stt = time.perf_counter()

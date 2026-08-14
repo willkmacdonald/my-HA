@@ -31,6 +31,7 @@ def rms(frame: np.ndarray) -> float:
 def record_utterance(
     stream: AudioStream,
     *,
+    preroll: bytes = b"",
     capture_channel: str = "left",
     n_channels: int = 1,
     silence_rms: float = 300,
@@ -42,18 +43,29 @@ def record_utterance(
     Endpointing only arms after speech is first heard, so leading silence
     doesn't cut the recording short.
 
+    `preroll` is mono int16 audio the caller already captured *before* calling
+    this — e.g. the frames read during wake-word detection. It is prepended to
+    the recording so the start of the utterance isn't lost in the gap between
+    wake-word detection and the recorder starting (which otherwise clipped the
+    first word: "tell me a joke" → "that's a joke"). Loud pre-roll also counts
+    as speech-already-started, so endpointing arms immediately.
+
     The XVF3800 delivers 2 interleaved channels (left=processed, right=ASR);
-    with n_channels>1 each frame is deinterleaved to `capture_channel` before
-    both the endpointing RMS and the returned bytes, so endpointing measures
-    the chosen channel (not an average) and Whisper receives mono. With the
-    default n_channels=1 (a plain mono mic, e.g. fake_satellite) select_channel
-    is a passthrough and behavior is unchanged.
+    with n_channels>1 each *stream* frame is deinterleaved to `capture_channel`
+    before both the endpointing RMS and the returned bytes (the pre-roll is
+    already mono — the caller selects the channel before buffering it), so
+    endpointing measures the chosen channel (not an average) and Whisper
+    receives mono. With the default n_channels=1 (a plain mono mic, e.g.
+    fake_satellite) select_channel is a passthrough and behavior is unchanged.
     """
-    frames: list[bytes] = []
+    frames: list[bytes] = [preroll] if preroll else []
     quiet_frames = 0
     quiet_needed = int(silence_seconds * SAMPLE_RATE / FRAME_SAMPLES)
     max_frames = int(max_seconds * SAMPLE_RATE / FRAME_SAMPLES)
-    started = False
+    # Loud pre-roll means the utterance already began — arm endpointing now so a
+    # stream that's silent from frame 0 still terminates instead of running to
+    # max_seconds.
+    started = bool(preroll) and rms(np.frombuffer(preroll, dtype=np.int16)) >= silence_rms
 
     for _ in range(max_frames):
         raw, _ = stream.read(FRAME_SAMPLES)

@@ -75,6 +75,45 @@ def test_record_respects_max_length() -> None:
     assert len(audio) == max_frames * pipeline.FRAME_SAMPLES * 2
 
 
+# --- pre-roll: audio captured before record_utterance is called (fixes the
+#     wake-word→record gap that clipped the front of the utterance) ---
+
+
+def test_preroll_is_prepended_to_the_recording() -> None:
+    """Frames the caller already read (e.g. during wake-word detection) are
+    prepended, so the start of the utterance isn't lost between detection and
+    the recorder starting."""
+    preroll = np.full(pipeline.FRAME_SAMPLES * 3, 1234, dtype=np.int16).tobytes()  # 3 frames
+    audio = pipeline.record_utterance(
+        FakeStream(loud_frames=5), preroll=preroll, silence_rms=300, silence_seconds=0.8
+    )
+    # the returned audio must START with the preroll bytes verbatim
+    assert audio[: len(preroll)] == preroll
+    # and total length = preroll + (recorded frames)
+    quiet_needed = int(0.8 * pipeline.SAMPLE_RATE / pipeline.FRAME_SAMPLES)
+    recorded = (5 + quiet_needed) * pipeline.FRAME_SAMPLES * 2
+    assert len(audio) == len(preroll) + recorded
+
+
+def test_preroll_counts_toward_endpointing_start() -> None:
+    """Loud pre-roll means speech has already started — so a stream that is
+    silent from frame 0 still records (and endpoints), rather than waiting
+    forever for a speech onset that already happened in the pre-roll."""
+
+    class SilentForever:
+        def read(self, n: int) -> tuple[np.ndarray, bool]:
+            return np.zeros(n, dtype=np.int16), False
+
+    loud_preroll = np.full(pipeline.FRAME_SAMPLES * 2, 2000, dtype=np.int16).tobytes()
+    audio = pipeline.record_utterance(
+        SilentForever(), preroll=loud_preroll, silence_rms=300, silence_seconds=0.8, max_seconds=5.0
+    )
+    quiet_needed = int(0.8 * pipeline.SAMPLE_RATE / pipeline.FRAME_SAMPLES)
+    # started=True from the pre-roll → endpoints after quiet_needed silent frames,
+    # not run to max_seconds.
+    assert len(audio) == len(loud_preroll) + quiet_needed * pipeline.FRAME_SAMPLES * 2
+
+
 # --- record_utterance channel selection (XVF3800: 2 interleaved channels) ---
 
 
