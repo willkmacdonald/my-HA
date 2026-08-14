@@ -19,7 +19,7 @@ Piper TTS. No Home Assistant. Roadmap:
 | 0 — Procurement | ✅ Ordered 2026-07-11: XVF3800 w/ XIAO ESP32-S3 (case version) + Dayton ND91-4 driver. **Board DELIVERED 2026-08-09** — Phase 3 unblocked. |
 | 1 — Mac backend + fake satellite | ✅ **Complete 2026-07-12.** Both exit criteria passed (spoken Q&A loop works; real-key LLM check works). |
 | 2 — Open Brain + timers | ✅ **COMPLETE 2026-08-09.** 176 tests. open-brain X-API-Key auth built + security-reviewed + deployed to prod (open-brain `37c9f62`, via that repo's GitHub Actions Deploy workflow), key in `wkm-shared-kv`/`ob-search-api-key`, my-HA `.env` wired + leak-guarded. **Both exit criteria PASSED live via fake satellite:** (a) "check my notes on the leek recipe" → real synthesized answer from an actual note; (b) 2-min timer survived a router kill+restart mid-countdown, still fired over an auto-reconnected websocket. *(4 non-blocking follow-up findings — see "Open findings" below.)* |
-| 3 — Board bring-up + wake-word gate | 🔜 **NEXT — unblocked** (board arrived). Hands-on-Pi: confirm box contents, reflash I2S→USB firmware (safe mode — **won't enumerate as USB mic until reflashed**), run `wakeword_bench.py` 20× on **both** capture channels (left processed vs right ASR), wire winner into `satellite.py`, gate **>90% detection**. **Mac-side code prereq:** `wakeword_bench.py` opens `channels=1` (`satellite/wakeword_bench.py:43`) — can't compare the two channels yet; needs a `--capture-channel` flag + a stale-audio drain fix (Phase 1 candidate bug #6) so the >90% number is trustworthy. |
+| 3 — Board bring-up + wake-word gate | ✅ **GATE PASSED 2026-08-13.** Flashed I2S→USB 2-ch firmware (v2.0.10) via `dfu-util` in Safe Mode on the **XMOS port** (by the 3.5mm jack — NOT the ESP32 port; that was the gotcha). Board now enumerates as USB "reSpeaker XVF3800 4-Mic Array" (2ch@16k, device index 1 on the Mac). `wakeword_bench.py --capture-channel {left,right}` "hey jarvis": **both channels 20/20 (100%)** (median score ~0.89) vs ~5% bare-mic baseline. Channel wired into `satellite.py` + shared `pipeline.py` (`--capture-channel`, default **right**/ASR-tuned). Full flash procedure + `save_configuration` brick warning: [docs/hardware.md](docs/hardware.md). |
 | 4+ | Phase 4 (full loop on Pi) needs Phase 3; Phase 5 (enclosure + a week of daily use), then **Phase 6 — Conversational paths (NEW, added 2026-08-12)**, then parked Phase 7 (music) / Phase 8 (ESP32 v2). See the roadmap spec. |
 
 **Shipped 2026-08-12 (not in the phase table above):**
@@ -28,13 +28,18 @@ Piper TTS. No Home Assistant. Roadmap:
 
 ## What's next (roadmap replanned 2026-08-12)
 
-**Phase 3 — board bring-up + wake-word gate — is NEXT and is the agreed next work.** Will's
-sequencing (2026-08-12): hardware bring-up → wake word working + >90% gate → full loop + live
-with it a while → *then* conversational (Phase 6). Conversational is deliberately gated on 3–5,
-because how conversation should *feel* is only knowable after daily use — do NOT start designing
-or building it before Phase 5.
+**Phase 4 — full loop on the Pi — is NEXT.** Will's sequencing (2026-08-12): hardware bring-up →
+wake word + >90% gate (both ✅ **done 2026-08-13**) → **full loop + live with it a while (Phase 4/5)**
+→ *then* conversational (Phase 6). Conversational is deliberately gated on 3–5, because how
+conversation should *feel* is only knowable after daily use — do NOT start designing or building
+it before Phase 5.
 
-- **Phase 3 — the go/no-go hardware gate.** Highest-leverage: proves the core "fix the mic, not the CPU" bet. Steps in the phase table above. The `wakeword_bench.py` channel-select (`--capture-channel` flag) + stale-audio drain fix is Mac-side and can be done *before* touching hardware — good first concrete step.
+- **Phase 4 — full loop on the Pi.** The bench + channel wiring are validated on the **Mac** (board
+  over USB, device index 1). Not yet run on the **Pi over Tailscale**. Phase 4 = `satellite.py` on
+  the Pi against the real Mac backend: closed-loop audio (`APLAY_DEVICE` → the XVF3800, never the
+  Pi's own out — see hardware.md), on-device endpointing tuning, barge-in, timer push on the real
+  satellite, and measuring USB power draw at speaker peaks. Note `satellite.py` defaults to
+  `--capture-channel right` (ASR); A/B against real Whisper transcription is a natural Phase 4 task.
 - **Quality Playbook resume** ("Run quality playbook phase 2") — agreed for after Phase 2 lands (now true). Audits the new scheduler/websocket/router code; would naturally sweep up remaining Findings 2/5/6 below.
 
 ## Open findings (post-Phase-2, root-caused 2026-08-09, NOT yet fixed)
