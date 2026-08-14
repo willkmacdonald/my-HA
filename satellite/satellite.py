@@ -43,16 +43,21 @@ PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium.onnx")
 # can only cancel audio it plays itself. On the Pi the XVF3800 enumerates as
 # ALSA card "Array", so APLAY_DEVICE=plughw:CARD=Array,DEV=0.
 APLAY_DEVICE = os.environ.get("APLAY_DEVICE", "default")
+# Absolute paths so the binaries resolve even when PATH is minimal (e.g. under
+# systemd, which does NOT inherit the venv's PATH — piper lives in the venv's
+# bin). Interactively, the bare names on PATH still work as defaults.
+PIPER_BIN = os.environ.get("PIPER_BIN", "piper")
+APLAY_BIN = os.environ.get("APLAY_BIN", "aplay")
 
 
 def speak(text: str) -> None:
     piper = subprocess.Popen(
-        ["piper", "--model", PIPER_VOICE, "--output-raw"],
+        [PIPER_BIN, "--model", PIPER_VOICE, "--output-raw"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
     )
     aplay = subprocess.Popen(
-        ["aplay", "-D", APLAY_DEVICE, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
+        [APLAY_BIN, "-D", APLAY_DEVICE, "-r", "22050", "-f", "S16_LE", "-t", "raw", "-"],
         stdin=piper.stdout,
     )
     piper.stdin.write(text.encode())
