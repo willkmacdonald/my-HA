@@ -61,6 +61,13 @@ def main() -> None:
     ap.add_argument("--wake-model", default="hey_jarvis")
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument(
+        "--inference-framework",
+        choices=["onnx", "tflite"],
+        default="onnx",
+        help="openWakeWord backend. Default onnx: it works on both the Mac and the "
+        "Pi, whereas tflite-runtime has no wheel for the Pi's Python/ARM.",
+    )
+    ap.add_argument(
         "--capture-channel",
         choices=sorted(CHANNEL_INDEX),
         default="right",
@@ -69,7 +76,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    oww = Model(wakeword_models=[args.wake_model])
+    oww = Model(wakeword_models=[args.wake_model], inference_framework=args.inference_framework)
     print(f"listening for wake word ({args.wake_model}) on the {args.capture_channel} channel…")
 
     with sd.InputStream(

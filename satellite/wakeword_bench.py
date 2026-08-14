@@ -40,6 +40,13 @@ def main() -> None:
         help="which XVF3800 channel to feed the wake-word model "
         "(left=processed audio, right=ASR reference); run both, wire the winner into satellite.py",
     )
+    ap.add_argument(
+        "--inference-framework",
+        choices=["onnx", "tflite"],
+        default="onnx",
+        help="openWakeWord backend. Default onnx: works on both Mac and Pi "
+        "(tflite-runtime has no wheel for the Pi's Python/ARM).",
+    )
     ap.add_argument("--list-devices", action="store_true")
     args = ap.parse_args()
 
@@ -47,7 +54,7 @@ def main() -> None:
         print(sd.query_devices())
         return
 
-    oww = Model(wakeword_models=[args.model])
+    oww = Model(wakeword_models=[args.model], inference_framework=args.inference_framework)
     hits = 0
     peak_scores: list[float] = []
 
