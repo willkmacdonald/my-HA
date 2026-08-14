@@ -219,7 +219,9 @@ Alexa-snappy; that is accepted.
 Real Open-Meteo calls and real `web_search` — validated by voice after deploy,
 as with every prior feature.
 
-## Out of scope (deliberately)
+## Out of scope for v1 (deliberately) + backlog
+
+**Rejected / separate concerns:**
 
 - **General-LLM-path latency** (Sonnet on `ask_llm`'s non-tool answers) — a
   separate, already-logged concern. This design picks Haiku for the *fallback/
@@ -228,3 +230,24 @@ as with every prior feature.
   simpler and generalizes (news/scores/facts) without grammar work.
 - **Streaming the spoken answer** — the satellite speaks the full reply; streaming
   TTS is a separate future latency lever.
+
+**Backlog (not in v1, captured 2026-08-13):**
+
+- **Pre-fetch/cache home weather → near-instant "what's the weather".** v1 does a
+  *live* `get_weather` call (~3–6s, the tool-use cost). The Alexa-speed pattern is
+  to pre-fetch the *home* forecast on a schedule and serve it from cache, so the
+  common "what's the weather" is a cache read, not a live round-trip. **Will's
+  intent: anchor at ~5am daily.** Design considerations to settle when built (do
+  NOT build in v1):
+  - *Staleness:* a 5am-only fetch is morning-old by afternoon — afternoon forecasts
+    shift. Likely 5am **plus** a periodic refresh (every ~3–4h) rather than once/day.
+  - *Cache-vs-live decision:* serve cache only for the **home** location and only
+    when **fresh** (< refresh interval old); a named city or a stale cache falls
+    back to the live `get_weather` path this spec builds. So the pre-fetch layers
+    *on top of* v1, reusing `weather.py` — v1's live path is the fallback.
+  - *Where it lives:* a small scheduler + cache. The router already runs an
+    asyncio scheduler in its FastAPI lifespan (for timers) — the weather pre-fetch
+    is the same shape and could ride alongside it, or be its own tiny loop.
+  - *Scope:* cache today + the next few days so "this weekend" is also instant.
+  - This is a clean fast-follow once v1's `weather.py` exists — it's a caching
+    layer, not new weather logic.
