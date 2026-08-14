@@ -5,12 +5,14 @@ server on the Mac (over Tailscale) → send transcript to the router → speak
 the reply with Piper.
 
 The XVF3800 presents as a normal USB audio device; echo cancellation and
-beamforming happen on its XMOS chip, so this script just reads clean mono
-16 kHz audio.
+beamforming happen on its XMOS chip. It exposes two 16 kHz channels
+(left=processed, right=ASR-tuned); this script reads both and selects one
+(--capture-channel, default right) for wake-word detection and the Whisper
+recording.
 
 Usage:
     STT_URL=ws://mac-studio:8100/stt ROUTER_URL=http://mac-studio:8200/route \
-        python satellite.py --device 1
+        python satellite.py --device 1 [--capture-channel right]
 """
 
 import argparse
@@ -18,11 +20,17 @@ import asyncio
 import os
 import subprocess
 
-import numpy as np
 import requests
 import sounddevice as sd
+from channelpick import CHANNEL_INDEX, select_channel
 from openwakeword.model import Model
 from pipeline import FRAME_SAMPLES, SAMPLE_RATE, record_utterance, transcribe
+
+# The XVF3800 exposes two capture channels: left=processed, right=ASR reference.
+# Both hit 100% wake-word detection in the Phase 3 bench; right is the vendor's
+# ASR-tuned output, so it's the default for the Whisper-facing stream. Override
+# with --capture-channel. (A plain mono mic would be CAPTURE_CHANNELS=1.)
+CAPTURE_CHANNELS = 2
 
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
@@ -52,27 +60,39 @@ def main() -> None:
     ap.add_argument("--device", type=int, default=None, help="sounddevice input index (XVF3800)")
     ap.add_argument("--wake-model", default="hey_jarvis")
     ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument(
+        "--capture-channel",
+        choices=sorted(CHANNEL_INDEX),
+        default="right",
+        help="which XVF3800 channel to use (left=processed, right=ASR-tuned); "
+        "feeds both wake-word detection and the Whisper recording",
+    )
     args = ap.parse_args()
 
     oww = Model(wakeword_models=[args.wake_model])
-    print(f"listening for wake word ({args.wake_model})…")
+    print(f"listening for wake word ({args.wake_model}) on the {args.capture_channel} channel…")
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
-        channels=1,
+        channels=CAPTURE_CHANNELS,
         dtype="int16",
         blocksize=FRAME_SAMPLES,
         device=args.device,
     ) as stream:
         while True:
-            frame, _ = stream.read(FRAME_SAMPLES)
-            scores = oww.predict(np.frombuffer(frame, dtype=np.int16))
+            raw, _ = stream.read(FRAME_SAMPLES)
+            mono = select_channel(
+                bytes(raw), channel=args.capture_channel, n_channels=CAPTURE_CHANNELS
+            )
+            scores = oww.predict(mono)
             if max(scores.values()) < args.threshold:
                 continue
 
             print("wake word detected, listening…")
             oww.reset()
-            audio = record_utterance(stream)
+            audio = record_utterance(
+                stream, capture_channel=args.capture_channel, n_channels=CAPTURE_CHANNELS
+            )
             text = asyncio.run(transcribe(audio, STT_URL))
             print(f"heard: {text!r}")
             if not text:

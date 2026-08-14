@@ -75,6 +75,77 @@ def test_record_respects_max_length() -> None:
     assert len(audio) == max_frames * pipeline.FRAME_SAMPLES * 2
 
 
+# --- record_utterance channel selection (XVF3800: 2 interleaved channels) ---
+
+
+class FakeStereoStream:
+    """Yields `loud_frames` interleaved-stereo frames where the two channels
+    can differ, then stereo silence forever. `read(n)` returns 2*n int16
+    samples interleaved [L0,R0,L1,R1,...] — exactly what a 2-channel
+    sounddevice read delivers when np.frombuffer'd."""
+
+    def __init__(self, loud_frames: int, left_level: int, right_level: int) -> None:
+        self.remaining_loud = loud_frames
+        self.left_level = left_level
+        self.right_level = right_level
+
+    def read(self, n: int) -> tuple[np.ndarray, bool]:
+        left = self.left_level if self.remaining_loud > 0 else 0
+        right = self.right_level if self.remaining_loud > 0 else 0
+        if self.remaining_loud > 0:
+            self.remaining_loud -= 1
+        stereo = np.empty(n * 2, dtype=np.int16)
+        stereo[0::2] = left
+        stereo[1::2] = right
+        return stereo, False
+
+
+def test_record_stereo_returns_mono_bytes() -> None:
+    """A 2-channel stream must yield MONO bytes (one channel), not the full
+    interleaved buffer — otherwise Whisper gets stereo it can't read."""
+    audio = pipeline.record_utterance(
+        FakeStereoStream(loud_frames=5, left_level=2000, right_level=2000),
+        capture_channel="right",
+        n_channels=2,
+        silence_rms=300,
+        silence_seconds=0.8,
+    )
+    quiet_needed = int(0.8 * pipeline.SAMPLE_RATE / pipeline.FRAME_SAMPLES)
+    expected_frames = 5 + quiet_needed
+    # mono: FRAME_SAMPLES samples/frame * 2 bytes — NOT doubled for 2 channels
+    assert len(audio) == expected_frames * pipeline.FRAME_SAMPLES * 2
+
+
+def test_record_endpoints_on_the_selected_channel_only() -> None:
+    """Endpointing must measure the SELECTED channel, not an average of both.
+    Left loud, right silent: selecting 'right' sees silence and never arms, so
+    it records to max_seconds; selecting 'left' hears speech."""
+    max_seconds = 2.0
+    max_frames = int(max_seconds * pipeline.SAMPLE_RATE / pipeline.FRAME_SAMPLES)
+
+    # capture_channel='right' on a right-silent stream: never starts, runs to max.
+    right = pipeline.record_utterance(
+        FakeStereoStream(loud_frames=5, left_level=2000, right_level=0),
+        capture_channel="right",
+        n_channels=2,
+        silence_rms=300,
+        max_seconds=max_seconds,
+    )
+    assert len(right) == max_frames * pipeline.FRAME_SAMPLES * 2
+
+    # capture_channel='left' on the same stream: hears the 5 loud frames, endpoints.
+    left = pipeline.record_utterance(
+        FakeStereoStream(loud_frames=5, left_level=2000, right_level=0),
+        capture_channel="left",
+        n_channels=2,
+        silence_rms=300,
+        silence_seconds=0.8,
+        max_seconds=max_seconds,
+    )
+    quiet_needed = int(0.8 * pipeline.SAMPLE_RATE / pipeline.FRAME_SAMPLES)
+    assert len(left) == (5 + quiet_needed) * pipeline.FRAME_SAMPLES * 2
+
+
 # --- transcribe ---
 
 

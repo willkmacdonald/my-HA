@@ -11,6 +11,7 @@ from typing import Protocol
 
 import numpy as np
 import websockets
+from channelpick import select_channel
 
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 1280  # 80 ms, openWakeWord's expected frame size
@@ -30,6 +31,8 @@ def rms(frame: np.ndarray) -> float:
 def record_utterance(
     stream: AudioStream,
     *,
+    capture_channel: str = "left",
+    n_channels: int = 1,
     silence_rms: float = 300,
     silence_seconds: float = 0.8,
     max_seconds: float = 12.0,
@@ -38,6 +41,13 @@ def record_utterance(
 
     Endpointing only arms after speech is first heard, so leading silence
     doesn't cut the recording short.
+
+    The XVF3800 delivers 2 interleaved channels (left=processed, right=ASR);
+    with n_channels>1 each frame is deinterleaved to `capture_channel` before
+    both the endpointing RMS and the returned bytes, so endpointing measures
+    the chosen channel (not an average) and Whisper receives mono. With the
+    default n_channels=1 (a plain mono mic, e.g. fake_satellite) select_channel
+    is a passthrough and behavior is unchanged.
     """
     frames: list[bytes] = []
     quiet_frames = 0
@@ -46,9 +56,10 @@ def record_utterance(
     started = False
 
     for _ in range(max_frames):
-        frame, _ = stream.read(FRAME_SAMPLES)
-        frames.append(bytes(frame))
-        loud = rms(np.frombuffer(bytes(frame), dtype=np.int16)) >= silence_rms
+        raw, _ = stream.read(FRAME_SAMPLES)
+        mono = select_channel(bytes(raw), channel=capture_channel, n_channels=n_channels)
+        frames.append(mono.tobytes())
+        loud = rms(mono) >= silence_rms
         if loud:
             started = True
             quiet_frames = 0
