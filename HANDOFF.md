@@ -40,6 +40,17 @@ it before Phase 5.
   Pi's own out — see hardware.md), on-device endpointing tuning, barge-in, timer push on the real
   satellite, and measuring USB power draw at speaker peaks. Note `satellite.py` defaults to
   `--capture-channel right` (ASR); A/B against real Whisper transcription is a natural Phase 4 task.
+  - **Pi state (2026-08-13):** it previously ran **Home Assistant** (the platform my-HA replaces) —
+    abandoned, being **fresh-flashed**, not refreshed. Decision: flash **full Raspberry Pi OS (with
+    desktop)**, NOT Lite. Reason (settled after Will corrected an earlier misframing): the attached
+    screen is **NOT** a substitute for the portable phone visual-surface (that stays Second Brain's,
+    and stays on the phone *because it's portable* — the desk-mounted Pi can't serve that need). The
+    full OS is kept only for a possible **ambient status display** — stationary, voice-adjacent
+    glances: timer counting down, "listening…", last transcription, now-playing (Phase 7). Voice-only
+    is still built first; the desktop image just doesn't foreclose that status UI. Pi-side needs:
+    Python + venv, `satellite/requirements.txt` (openwakeword, sounddevice, …), Piper TTS, Tailscale
+    (reach the Mac backend). The phone/Second-Brain surface is unaffected by this — different device,
+    different job.
 - **Quality Playbook resume** ("Run quality playbook phase 2") — agreed for after Phase 2 lands (now true). Audits the new scheduler/websocket/router code; would naturally sweep up remaining Findings 2/5/6 below.
 
 ## Open findings (post-Phase-2, root-caused 2026-08-09, NOT yet fixed)
