@@ -23,6 +23,40 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch):
         yield c
 
 
+# --- spoken_text: response parsing robust to adaptive thinking ---
+
+
+def _block(type_: str, text: str = ""):
+    """A minimal stand-in for an anthropic content block (duck-typed)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(type=type_, text=text)
+
+
+def _msg(*blocks):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(content=list(blocks))
+
+
+def test_spoken_text_plain_text_block() -> None:
+    assert router.spoken_text(_msg(_block("text", "hello"))) == "hello"
+
+
+def test_spoken_text_skips_leading_thinking_block() -> None:
+    """Sonnet 5 defaults to adaptive thinking: a non-trivial prompt yields
+    [thinking, text]. spoken_text must return the text, not choke on content[0]
+    (the live bug: content[0].text on a ThinkingBlock -> AttributeError -> the
+    whole turn errored to ERROR_SPEECH)."""
+    msg = _msg(_block("thinking"), _block("text", "the real answer"))
+    assert router.spoken_text(msg) == "the real answer"
+
+
+def test_spoken_text_raises_when_no_text_block() -> None:
+    with pytest.raises(ValueError, match="no text block"):
+        router.spoken_text(_msg(_block("thinking")))
+
+
 # --- match_intent (pure function) ---
 
 
@@ -53,6 +87,26 @@ def test_unmatched_text_falls_back_to_llm(client, monkeypatch: pytest.MonkeyPatc
     resp = client.post("/route", json={"text": "what's the weather on Mars"})
     assert resp.status_code == 200
     assert resp.json() == {"speech": "It's red and dusty.", "intent": "llm_fallback"}
+
+
+def test_llm_fallback_survives_thinking_block_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full /route -> ask_llm path with a real (fake) Anthropic client that
+    returns [thinking, text]. This is the exact live failure: an unmatched
+    utterance ('look in open brand for a recipe for leaks') made Sonnet 5 think
+    first, and content[0].text raised -> ERROR_SPEECH. Must now speak the text
+    and disable thinking on the call."""
+    with TestClient(router.app) as c:
+        # Patch after lifespan startup (it installs a real client on app.state).
+        router.app.state.anthropic = _FakeAnthropic(
+            "I don't have that app, but here's a recipe.", lead_thinking=True
+        )
+        resp = c.post("/route", json={"text": "look in open brand for a recipe for leaks"})
+    body = resp.json()
+    assert body == {
+        "speech": "I don't have that app, but here's a recipe.",
+        "intent": "llm_fallback",
+    }
+    assert router.app.state.anthropic.calls[0]["thinking"] == router.THINKING_OFF
 
 
 def test_timing_opt_in_adds_router_ms(client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,10 +202,17 @@ def _ob_payload(*sims: float) -> dict:
 
 
 class _FakeAnthropic:
-    """Duck-typed messages.create capturing the synthesis call."""
+    """Duck-typed messages.create capturing the synthesis call.
 
-    def __init__(self, reply: str) -> None:
+    Mirrors the real API's content shape: with lead_thinking=True the response
+    is [thinking, text] (what Sonnet 5's adaptive thinking emits for anything
+    non-trivial), so tests exercise the same block structure the router parses
+    in production — not a convenient single-text-block fiction."""
+
+    def __init__(self, reply: str, *, lead_thinking: bool = False) -> None:
         self.calls: list[dict] = []
+        self._reply = reply
+        self._lead_thinking = lead_thinking
         outer = self
 
         class _Messages:
@@ -159,7 +220,11 @@ class _FakeAnthropic:
                 outer.calls.append(kwargs)
                 from types import SimpleNamespace
 
-                return SimpleNamespace(content=[SimpleNamespace(text=reply)])
+                blocks = []
+                if outer._lead_thinking:
+                    blocks.append(SimpleNamespace(type="thinking", thinking="hmm"))
+                blocks.append(SimpleNamespace(type="text", text=outer._reply))
+                return SimpleNamespace(content=blocks)
 
         self.messages = _Messages()
 
@@ -189,6 +254,22 @@ async def test_ask_open_brain_synthesizes_from_filtered_hits(
     prompt_text = fake.calls[0]["messages"][0]["content"]
     assert "note 0 content" in prompt_text and "note 1 content" in prompt_text
     assert "note 2 content" not in prompt_text  # similarity 0.3 < 0.55 filtered
+    assert fake.calls[0]["thinking"] == router.THINKING_OFF  # no thinking latency on the voice path
+
+
+@respx.mock
+async def test_ask_open_brain_survives_thinking_block_in_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: SYNTH_MODEL may return [thinking, text]. The synthesized
+    answer must be the text block, not content[0] (which would be the thinking
+    block and used to raise AttributeError -> ERROR_SPEECH)."""
+    monkeypatch.setattr(router, "OPEN_BRAIN_URL", "http://ob.local")
+    respx.post("http://ob.local/api/search").mock(return_value=Response(200, json=_ob_payload(0.9)))
+    fake = _FakeAnthropic("Braise the leeks in butter.", lead_thinking=True)
+    async with httpx.AsyncClient() as http:
+        speech = await router.ask_open_brain("leek recipe", http, fake)
+    assert speech == "Braise the leeks in butter."
 
 
 @respx.mock

@@ -49,7 +49,31 @@ SYNTH_PROMPT = (
 
 ERROR_SPEECH = "Sorry, something went wrong answering that."
 
+# Claude 4.6+/5 models (both LLM_MODEL and SYNTH_MODEL) default to *adaptive*
+# extended thinking, which prepends a ThinkingBlock to the response for anything
+# non-trivial. Two consequences we handle deliberately:
+#   1. The spoken answer is no longer content[0] — content[0] is the thinking
+#      block and content[0].text raises AttributeError. spoken_text() finds the
+#      text block regardless of leading thinking. (This bit us live: an ambiguous
+#      fallback prompt thought first and the whole turn errored to ERROR_SPEECH.)
+#   2. Thinking is pure latency for a "reply in one short sentence" voice task
+#      (~660ms measured on Sonnet 5), so we turn it off for these calls.
+# budget_tokens can't cap it (rejected with 400 on Sonnet 5); disabled is the
+# supported off switch. spoken_text stays as the durable belt regardless.
+THINKING_OFF = {"type": "disabled"}
+
 log = logging.getLogger("router")
+
+
+def spoken_text(msg) -> str:  # noqa: ANN001 — anthropic.types.Message
+    """The assistant's spoken text from a Messages response, skipping any
+    leading thinking/tool blocks. Falls back to the first block's text so a
+    thinking-free response still works. Raises if there's no text at all."""
+    for block in msg.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise ValueError(f"no text block in response (blocks: {[b.type for b in msg.content]})")
+
 
 INTENTS = yaml.safe_load(Path(__file__).with_name("intents.yaml").read_text())["intents"]
 
@@ -161,20 +185,22 @@ async def ask_open_brain(query: str, http: httpx.AsyncClient, anthropic: AsyncAn
     msg = await anthropic.messages.create(
         model=SYNTH_MODEL,
         max_tokens=300,
+        thinking=THINKING_OFF,
         system=SYNTH_PROMPT,
         messages=[{"role": "user", "content": f"Notes:\n{notes}\n\nQuestion: {query}"}],
     )
-    return msg.content[0].text
+    return spoken_text(msg)
 
 
 async def ask_llm(text: str, anthropic: AsyncAnthropic) -> str:
     msg = await anthropic.messages.create(
         model=LLM_MODEL,
         max_tokens=300,
+        thinking=THINKING_OFF,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": text}],
     )
-    return msg.content[0].text
+    return spoken_text(msg)
 
 
 @app.post("/route")
