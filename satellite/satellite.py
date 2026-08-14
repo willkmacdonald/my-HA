@@ -34,9 +34,14 @@ CAPTURE_CHANNELS = 2
 
 STT_URL = os.environ.get("STT_URL", "ws://localhost:8100/stt")
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8200/route")
-PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium")
+# piper-tts (the pip package) wants a PATH to the voice's .onnx file, not a bare
+# voice name — download it once with `python -m piper.download_voices <name>`,
+# then point PIPER_VOICE at the resulting .onnx (absolute path is safest so it
+# works regardless of the process's working directory).
+PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium.onnx")
 # MUST be the XVF3800's own playback device (see docs/hardware.md): the AEC
-# can only cancel audio it plays itself. e.g. APLAY_DEVICE=plughw:CARD=XVF3800
+# can only cancel audio it plays itself. On the Pi the XVF3800 enumerates as
+# ALSA card "Array", so APLAY_DEVICE=plughw:CARD=Array,DEV=0.
 APLAY_DEVICE = os.environ.get("APLAY_DEVICE", "default")
 
 
