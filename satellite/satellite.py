@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import os
 import subprocess
+import time
 
 import requests
 import sounddevice as sd
@@ -90,6 +91,13 @@ def main() -> None:
         help="skip TTS — print the reply instead of speaking it. Lets the full "
         "wake→record→STT→route pipeline be verified before Piper is installed.",
     )
+    ap.add_argument(
+        "--timing",
+        action="store_true",
+        help="print a per-stage latency breakdown after each query (record / STT / "
+        "router round-trip incl. the router's own reported time / TTS). Diagnostic "
+        "for finding which stage dominates latency.",
+    )
     args = ap.parse_args()
 
     oww = Model(wakeword_models=[args.wake_model], inference_framework=args.inference_framework)
@@ -113,19 +121,49 @@ def main() -> None:
 
             print("wake word detected, listening…")
             oww.reset()
+
+            t0 = time.perf_counter()
             audio = record_utterance(
                 stream, capture_channel=args.capture_channel, n_channels=CAPTURE_CHANNELS
             )
+            t_record = time.perf_counter()
             text = asyncio.run(transcribe(audio, STT_URL))
+            t_stt = time.perf_counter()
             print(f"heard: {text!r}")
             if not text:
                 continue
 
-            resp = requests.post(ROUTER_URL, json={"text": text}, timeout=60)
-            speech = resp.json().get("speech", "")
+            # ?timing=1 asks the router to report its own handling time, so the
+            # round-trip can be split into network vs router-thinking.
+            url = ROUTER_URL + ("?timing=1" if args.timing else "")
+            resp = requests.post(url, json={"text": text}, timeout=60)
+            t_route = time.perf_counter()
+            body = resp.json()
+            speech = body.get("speech", "")
             print(f"reply: {speech!r}")
+
+            t_speak = t_route
             if speech and not args.no_speak:
                 speak(speech)
+                t_speak = time.perf_counter()
+
+            if args.timing:
+                router_ms = (body.get("timing_ms") or {}).get("router")
+                rt_ms = (t_route - t_stt) * 1000
+                net_ms = rt_ms - router_ms if router_ms is not None else None
+                parts = [
+                    f"record {(t_record - t0) * 1000:6.0f}ms",
+                    f"STT {(t_stt - t_record) * 1000:6.0f}ms",
+                    f"route {rt_ms:6.0f}ms"
+                    + (
+                        f" (router {router_ms:.0f} + net {net_ms:.0f})"
+                        if net_ms is not None
+                        else ""
+                    ),
+                    f"TTS {(t_speak - t_route) * 1000:6.0f}ms",
+                    f"| total {(t_speak - t0) * 1000:6.0f}ms",
+                ]
+                print("  ⏱  " + "  ".join(parts))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -177,7 +178,19 @@ async def ask_llm(text: str, anthropic: AsyncAnthropic) -> str:
 
 
 @app.post("/route")
-async def route(utt: Utterance, request: Request) -> dict:
+async def route(utt: Utterance, request: Request, timing: bool = False) -> dict:
+    """Public entrypoint. Delegates to _route for the dispatch, and — when
+    ?timing=1 — stamps the router's own handling time onto the response for
+    latency diagnosis. Off by default so production responses stay lean and the
+    exact-shape contract the tests rely on is unchanged."""
+    start = time.perf_counter()
+    result = await _route(utt, request)
+    if timing:
+        result["timing_ms"] = {"router": round((time.perf_counter() - start) * 1000, 1)}
+    return result
+
+
+async def _route(utt: Utterance, request: Request) -> dict:
     text = utt.text.strip()
     state = request.app.state
     try:

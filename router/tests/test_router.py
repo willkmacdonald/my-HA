@@ -55,6 +55,26 @@ def test_unmatched_text_falls_back_to_llm(client, monkeypatch: pytest.MonkeyPatc
     assert resp.json() == {"speech": "It's red and dusty.", "intent": "llm_fallback"}
 
 
+def test_timing_opt_in_adds_router_ms(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """?timing=1 adds timing_ms.router (a number) for latency diagnosis."""
+    monkeypatch.setattr(router, "ask_llm", AsyncMock(return_value="It's red and dusty."))
+    resp = client.post("/route?timing=1", json={"text": "what's the weather on Mars"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["speech"] == "It's red and dusty."
+    assert body["intent"] == "llm_fallback"
+    assert isinstance(body["timing_ms"]["router"], (int, float))
+    assert body["timing_ms"]["router"] >= 0
+
+
+def test_timing_absent_by_default(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without ?timing, the response carries no timing_ms — keeps the lean
+    production shape and the exact-equality contract other tests rely on."""
+    monkeypatch.setattr(router, "ask_llm", AsyncMock(return_value="It's red and dusty."))
+    resp = client.post("/route", json={"text": "what's the weather on Mars"})
+    assert "timing_ms" not in resp.json()
+
+
 def test_knowledge_intent_without_open_brain_falls_back_to_llm(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
